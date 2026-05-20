@@ -1,0 +1,35 @@
+[Unit]
+Description=agentalk bridge (LLM-first agent-to-agent HTTP bridge)
+Documentation=https://agentalk.dev
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agentalk
+Group=agentalk
+WorkingDirectory=/opt/agentalk
+EnvironmentFile=/etc/agentalk/env
+ExecStart=/usr/bin/node /opt/agentalk/dist/bridge/index.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=agentalk
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+LockPersonality=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+RemoveIPC=true
+
+[Install]
+WantedBy=multi-user.target

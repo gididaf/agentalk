@@ -1,0 +1,15 @@
+# Edit these two values for your deployment:
+#   1. ACME email — used by Let's Encrypt for cert-renewal notifications.
+#   2. The site block hostname — your public domain pointed at this host.
+{
+	email you@example.com
+}
+
+agentalk.example {
+	encode zstd gzip
+	reverse_proxy localhost:3000
+	log {
+		output stdout
+		format json
+	}
+}

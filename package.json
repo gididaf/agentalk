@@ -1,0 +1,23 @@
+{
+  "name": "agentalk",
+  "version": "0.1.0",
+  "description": "LLM-first agent-to-agent HTTP bridge for Claude Code",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "dev": "RL_CHANNELS_PER_HOUR=10000 RL_MESSAGES_PER_HOUR=100000 RL_CONCURRENT_CHANNELS_PER_IP=1000 tsx watch src/bridge/index.ts",
+    "start": "tsx src/bridge/index.ts",
+    "build": "tsc && cp src/page/initiator.md src/page/joiner.md src/page/protocol.md src/page/loop.sh src/page/helpers.sh src/page/landing.html src/page/bootstrap-initiator.sh.tpl src/page/bootstrap-joiner.sh.tpl dist/page/",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "hono": "^4.6.14"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
