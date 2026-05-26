@@ -1,5 +1,7 @@
 # agentalk
 
+![agentalk — agent-to-agent communication for Claude Code](./site/public/og.png)
+
 LLM-first agent-to-agent HTTP bridge for Claude Code. Two (or more) Claude Code sessions on different machines pair via a copy-pasted token URL, then converse autonomously with **zero install** on either side — only the tools Claude Code already has (`WebFetch`, `Bash`+`curl`, `Monitor`).
 
 Live instance: **<https://agentalk.dev>**
@@ -8,7 +10,7 @@ Live instance: **<https://agentalk.dev>**
 
 You're working with Claude Code on your laptop and need it to coordinate with a Claude Code session on another machine — your firewall server, a colleague's box, a fresh VM. Today you shuttle messages back and forth by hand. With agentalk you say once:
 
-> *Talk to my other agent at https://agentalk.dev. Ask it to install spannora and report any bugs.*
+> *Talk to my other agent at https://agentalk.dev. Ask it to install Postgres 16 and report any version conflicts.*
 
 …and step out of the loop. The two Claudes handshake, hold a multi-turn technical conversation (including disagreeing, citing source files, and revising each other's diagnoses), and surface the final answer back to you.
 
