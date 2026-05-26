@@ -1,0 +1,92 @@
+---
+const pathname = Astro.url.pathname;
+function isActive(path: string): boolean {
+  if (path === "/") return pathname === "/";
+  return pathname === path || pathname.startsWith(path + "/");
+}
+const links = [
+  { href: "/how-it-works", label: "How it works" },
+  { href: "/use-cases", label: "Use cases" },
+  { href: "/vs", label: "Compare" },
+  { href: "/docs", label: "Docs" },
+  { href: "/faq", label: "FAQ" },
+];
+---
+
+<header class="site-nav">
+  <div class="container">
+    <a href="/" class="brand" aria-label="agentalk home">
+      <svg class="brand-icon" width="22" height="22" viewBox="0 0 32 32" aria-hidden="true" focusable="false">
+        <circle cx="12" cy="16" r="6.5" fill="currentColor" opacity="0.5"/>
+        <circle cx="20" cy="16" r="6.5" fill="currentColor" opacity="0.95"/>
+      </svg>
+      <span class="brand-text">agentalk</span>
+    </a>
+    <nav aria-label="Primary">
+      {links.map((l) => (
+        <a href={l.href} class:list={["nav-link", { active: isActive(l.href) }]}>{l.label}</a>
+      ))}
+      <a href="https://github.com/gididaf/agentalk" class="nav-link nav-link-cta" rel="noopener">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<style>
+  .site-nav {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: color-mix(in srgb, var(--bg) 92%, transparent);
+    -webkit-backdrop-filter: saturate(180%) blur(10px);
+    backdrop-filter: saturate(180%) blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .site-nav .container {
+    max-width: var(--max-w);
+    margin: 0 auto;
+    padding: 0.75rem 1.25rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    justify-content: space-between;
+  }
+  .brand {
+    color: var(--text);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+    font-size: 1.05rem;
+    letter-spacing: -0.01em;
+    transition: color 120ms;
+  }
+  .brand:hover { color: var(--accent); text-decoration: none; }
+  .brand-icon { color: var(--accent); flex-shrink: 0; }
+  .brand-text { line-height: 1; }
+  .brand:hover .brand-icon { color: var(--accent-hover); }
+  @media (max-width: 380px) {
+    .brand-text { font-size: 1rem; }
+  }
+  nav { display: flex; flex-wrap: wrap; gap: 0.25rem; align-items: center; }
+  .nav-link {
+    color: var(--muted);
+    font-size: 0.92rem;
+    padding: 0.4rem 0.65rem;
+    border-radius: 6px;
+    transition: color 120ms, background 120ms;
+  }
+  .nav-link:hover { color: var(--text); background: var(--accent-soft); text-decoration: none; }
+  .nav-link.active { color: var(--accent); }
+  .nav-link-cta {
+    border: 1px solid var(--border);
+    margin-left: 0.35rem;
+    color: var(--text);
+  }
+  .nav-link-cta:hover { border-color: var(--accent); color: var(--accent); }
+
+  @media (max-width: 640px) {
+    .site-nav .container { flex-wrap: wrap; gap: 0.5rem; padding: 0.6rem 1rem; }
+    nav { gap: 0.1rem; }
+    .nav-link { padding: 0.35rem 0.55rem; font-size: 0.85rem; }
+  }
+</style>

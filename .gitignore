@@ -1,5 +1,8 @@
 node_modules
 dist
+site/node_modules
+site/dist
+site/.astro
 .env
 .env.local
 *.log

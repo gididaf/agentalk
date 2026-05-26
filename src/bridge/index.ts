@@ -5,6 +5,7 @@ import { ChannelStore } from "./channels.js";
 import { RateLimiter, loadConfig as loadRateLimitConfig } from "./rate-limit.js";
 import { renderMetrics } from "./metrics.js";
 import {
+  loadSiteAsset,
   renderHelpersScript,
   renderInitiator,
   renderInitiatorBootstrap,
@@ -107,12 +108,84 @@ app.get("/", (c) => {
   }
   return c.body(renderLanding(), 200, {
     "content-type": "text/html; charset=utf-8",
-    "cache-control": "private, max-age=300",
+    // public (not private): same body for every browser/crawler UA. The Vary
+    // header lets Cloudflare cache a separate copy for the LLM (Claude-User)
+    // UA class without poisoning either. Public caching improves TTFB/LCP for
+    // cold visitors → Core Web Vitals win.
+    "cache-control": "public, max-age=300",
     vary: "User-Agent",
   });
 });
 app.get("/llms.txt", initiatorHandler);
 app.get("/c/:id", joinerHandler);
+
+// Static assets built by Astro into site/dist/. These are public — same body
+// for every UA — so no Vary header. Robots and sitemap must be byte-stable for
+// search engines, so cache aggressively at the CDN.
+const STATIC_ASSETS: Record<string, { contentType: string; cacheControl: string }> = {
+  "/robots.txt": { contentType: "text/plain; charset=utf-8", cacheControl: "public, max-age=3600" },
+  "/sitemap-index.xml": { contentType: "application/xml; charset=utf-8", cacheControl: "public, max-age=3600" },
+  "/sitemap-0.xml": { contentType: "application/xml; charset=utf-8", cacheControl: "public, max-age=3600" },
+  "/favicon.svg": { contentType: "image/svg+xml", cacheControl: "public, max-age=86400" },
+  "/favicon-32.png": { contentType: "image/png", cacheControl: "public, max-age=86400" },
+  "/apple-touch-icon.png": { contentType: "image/png", cacheControl: "public, max-age=86400" },
+  "/logo.svg": { contentType: "image/svg+xml", cacheControl: "public, max-age=86400" },
+  "/og.png": { contentType: "image/png", cacheControl: "public, max-age=86400" },
+};
+
+for (const [path, meta] of Object.entries(STATIC_ASSETS)) {
+  app.get(path, (c) => {
+    try {
+      const buf = loadSiteAsset(path.slice(1));
+      // Hono expects Uint8Array<ArrayBuffer>; Buffer.buffer is ArrayBufferLike.
+      // Copy into a fresh Uint8Array to satisfy the type.
+      const body = new Uint8Array(buf);
+      return c.body(body, 200, {
+        "content-type": meta.contentType,
+        "cache-control": meta.cacheControl,
+      });
+    } catch {
+      return c.notFound();
+    }
+  });
+}
+
+// Astro-built content pages. Each path serves the corresponding
+// <path>/index.html from site/dist/. Unlike /, these do not UA-sniff:
+// LLM agents that land here just get the HTML, which is fine — the
+// canonical SDK is at /llms.txt. No Vary: User-Agent because the body
+// is the same for every UA.
+const HTML_PAGES = [
+  "/how-it-works",
+  "/use-cases",
+  "/use-cases/parallel-coding",
+  "/use-cases/distributed-code-review",
+  "/use-cases/agent-swarms",
+  "/vs",
+  "/vs/mcp",
+  "/vs/autogen",
+  "/vs/crewai",
+  "/docs",
+  "/faq",
+  "/about",
+];
+
+for (const path of HTML_PAGES) {
+  app.get(path, (c) => {
+    try {
+      const buf = loadSiteAsset(`${path.slice(1)}/index.html`);
+      return c.body(buf.toString("utf8"), 200, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "public, max-age=300",
+      });
+    } catch {
+      return c.notFound();
+    }
+  });
+  // Trailing-slash form 301s to the canonical no-slash form. Inbound links
+  // (including older sitemaps) may carry a slash; without this they 404.
+  app.get(`${path}/`, (c) => c.redirect(path, 301));
+}
 
 app.get("/loop.sh", (c) =>
   c.body(renderLoopScript(), 200, {
@@ -158,6 +231,24 @@ app.get("/metrics", (c) =>
 );
 
 app.notFound((c) => {
+  const ua = c.req.header("user-agent") ?? "";
+  const isHumanBrowser = !LLM_UA.test(ua) || SEARCH_BOT_UA.test(ua);
+  // Humans and crawlers get the styled HTML 404 from the Astro build so they
+  // still have a Nav, footer, and links to popular destinations. LLM agents
+  // (Claude Code, etc.) keep getting the markdown hint, which is shorter and
+  // tells them how to recover by fetching /llms.txt.
+  if (isHumanBrowser) {
+    try {
+      const buf = loadSiteAsset("404.html");
+      return c.body(buf.toString("utf8"), 404, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        vary: "User-Agent",
+      });
+    } catch {
+      // Fall through to markdown if the static 404 page is missing.
+    }
+  }
   const base = bridgeBase(c);
   const body = `# agentalk — not found
 
@@ -175,6 +266,7 @@ There is **no chat-style \`POST /\` endpoint**. All operations are described in 
   return c.body(body, 404, {
     "content-type": "text/markdown; charset=utf-8",
     "cache-control": "no-store",
+    vary: "User-Agent",
   });
 });
 

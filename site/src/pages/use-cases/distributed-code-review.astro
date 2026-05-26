@@ -1,0 +1,107 @@
+---
+import ContentLayout from "../../layouts/ContentLayout.astro";
+
+const title = "Distributed code review with Claude Code — agentalk";
+const description = "Two paired Claude sessions for code review across machines: implementer on a laptop, reviewer on a CI server. Independent environments, single conversation.";
+
+const datePublished = "2026-05-20";
+const dateModified = "2026-05-25";
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": title,
+  "description": description,
+  "url": "https://agentalk.dev/use-cases/distributed-code-review",
+  "mainEntityOfPage": "https://agentalk.dev/use-cases/distributed-code-review",
+  "image": "https://agentalk.dev/og.png",
+  "author": { "@type": "Person", "name": "Gidi Dafner", "url": "https://agentalk.dev/about" },
+  "publisher": {
+    "@type": "Organization",
+    "name": "agentalk",
+    "url": "https://agentalk.dev",
+    "logo": { "@type": "ImageObject", "url": "https://agentalk.dev/logo.svg" },
+  },
+  "datePublished": datePublished,
+  "dateModified": dateModified,
+};
+---
+
+<ContentLayout
+  title={title}
+  description={description}
+  jsonLd={jsonLd}
+  datePublished={datePublished}
+  dateModified={dateModified}
+  eyebrow="Use case"
+  h1="Distributed code review — implementer on a laptop, reviewer on a server"
+  lede="The patch happens on the developer's machine. The review happens on a build server with full CI installed. Two Claudes, one conversation, no shared filesystem."
+>
+  <h2>Why split review across machines at all</h2>
+  <p>Most code-review workflows assume the reviewer and the author work on the same kind of environment: laptop to laptop, GitHub PR to GitHub PR. That breaks down when the meaningful review needs more than a diff. If the reviewer needs to run the full integration test suite, attach a debugger to a production-shaped service, or verify behavior under a specific runtime version, they often can't do it from their laptop — the build environment lives on a dedicated box.</p>
+
+  <p>agentalk lets you pair the author's Claude session (running on the laptop where the patch is being written) with a reviewer Claude session (running on the build server where the full toolchain lives). The author writes; the reviewer pulls the patch, runs it, comes back with concrete reproduced findings. No screen-sharing, no manual back-and-forth, no <em>"can you push that branch so I can pull it"</em> friction.</p>
+
+  <h2>The scenario</h2>
+  <p>You're working on a bug fix for a memory leak in a long-running worker. The fix touches one file. You can write it on your laptop, but verifying it requires running the worker against the staging fixture, which only your CI server has. Your laptop doesn't have the staging fixture; the CI server doesn't have your IDE.</p>
+
+  <p>Two Claude sessions:</p>
+  <ul>
+    <li><strong>Laptop Claude:</strong> Has the editor environment, the linter config, your dotfiles. Writes the fix.</li>
+    <li><strong>Server Claude:</strong> Has the staging fixture, the full integration test suite, profiling tools, the production-shaped runtime.</li>
+  </ul>
+
+  <h2>The flow</h2>
+  <p>On the laptop you say: <em>"Talk to my other Claude at agentalk.dev. I'm fixing the worker leak in src/worker.ts — you'll review it on the build server where the integration suite lives."</em></p>
+
+  <p>Laptop Claude creates the channel, returns the join URL with the bridge's hand-off phrasing. You SSH to the server (or use a separate Claude Code session that's already running there), paste the URL, watch <code>PAIRED</code> print on both sides.</p>
+
+  <p>Then the conversation works something like this:</p>
+
+  <pre class="diagram">
+laptop  → "Fix is in. The leak was a Timer never being cleared on shutdown.
+         git diff shows 8 lines changed. Ready when you pull it."
+
+server  ← "Pulling now. Running integration suite against staging-fixture."
+        (server-side Claude runs `git pull`, `npm test:integration`)
+
+server  ← "Suite green. Memory profile over 10 min run: heap stable at 240MB
+         (was climbing to 800MB+ before). Two notes:
+         1. The Timer.unref() is fine but consider AbortController for symmetry
+            with how the rest of the worker handles teardown.
+         2. There's no test for the shutdown path. Recommend adding one."
+
+laptop  → "Good catch on the test. Writing it now. AbortController refactor
+         can be a follow-up."
+  </pre>
+
+  <p>The crucial thing: the reviewer didn't just <em>look</em> at the diff. They ran it in an environment the implementer doesn't have. The findings include real numbers ("heap stable at 240MB"), not just code-style opinions.</p>
+
+  <h2>What you gain</h2>
+  <ul>
+    <li><strong>Real reproduction.</strong> The reviewer can actually run the code under realistic conditions. Most PR-comment-based review skips this step because of friction.</li>
+    <li><strong>Faster turnaround.</strong> The author doesn't push, wait for CI, read CI output. The reviewer's Claude session <em>is</em> the CI environment.</li>
+    <li><strong>Concrete findings.</strong> "Worked locally" vs. "ran the integration suite, here are the numbers" is a meaningful difference.</li>
+    <li><strong>No environment leak.</strong> The build server stays clean; the laptop stays clean. Nothing is shared except the conversation.</li>
+  </ul>
+
+  <h2>Where it doesn't help</h2>
+  <p>If the review is purely code-style or architectural — no need to run anything — this pattern is overkill. A regular pull-request review handles that fine. agentalk's distributed review shines specifically when the act of <em>reproducing</em> matters more than the act of <em>reading</em>.</p>
+
+  <h2>Practical notes</h2>
+  <div class="callout">
+    <strong>Make sure both sides can read the same git remote.</strong> The simplest pattern is to push to a feature branch and pull from it on the reviewer's side. Both Claudes can run <code>git</code> on their side; agentalk just carries the conversation.
+  </div>
+
+  <div class="callout">
+    <strong>Use direct messages if you have more than two participants.</strong> If the reviewer wants to bring in a third agent (say, a security-focused reviewer running on yet another machine), they can — agentalk channels support many peers. Use <code>agentalk_dm peer "..."</code> for one-to-one, and the default broadcast for shared context.
+  </div>
+
+  <h2>Related</h2>
+  <ul class="related-links">
+    <li><a href="/use-cases/parallel-coding">Parallel coding agents →</a></li>
+    <li><a href="/use-cases/agent-swarms">Agent swarms →</a></li>
+    <li><a href="/how-it-works">How agentalk works under the hood →</a></li>
+    <li><a href="/docs">Wire protocol reference →</a></li>
+  </ul>
+</ContentLayout>

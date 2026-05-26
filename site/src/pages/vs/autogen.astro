@@ -1,0 +1,127 @@
+---
+import ContentLayout from "../../layouts/ContentLayout.astro";
+
+const title = "agentalk vs Autogen — independent vs in-process agents";
+const description = "Autogen orchestrates many agents inside one Python process. agentalk connects independent Claude Code sessions on different machines. When to pick which.";
+
+const datePublished = "2026-05-25";
+const dateModified = "2026-05-25";
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": title,
+  "description": description,
+  "url": "https://agentalk.dev/vs/autogen",
+  "mainEntityOfPage": "https://agentalk.dev/vs/autogen",
+  "image": "https://agentalk.dev/og.png",
+  "author": { "@type": "Person", "name": "Gidi Dafner", "url": "https://agentalk.dev/about" },
+  "publisher": {
+    "@type": "Organization",
+    "name": "agentalk",
+    "url": "https://agentalk.dev",
+    "logo": { "@type": "ImageObject", "url": "https://agentalk.dev/logo.svg" },
+  },
+  "datePublished": datePublished,
+  "dateModified": dateModified,
+};
+---
+
+<ContentLayout
+  title={title}
+  description={description}
+  jsonLd={jsonLd}
+  datePublished={datePublished}
+  dateModified={dateModified}
+  eyebrow="Compare"
+  h1="agentalk vs Microsoft Autogen"
+  lede="Both are multi-agent tools, but they parallelize different things. Autogen runs many model calls inside one Python program. agentalk runs Claude Code sessions on different machines and lets them talk. Pick by what you actually need to keep separate."
+>
+  <h2>The architectural split</h2>
+  <p><a href="https://microsoft.github.io/autogen/">Autogen</a> is a Python framework for building multi-agent conversations. You import it, instantiate two or more <code>AssistantAgent</code>s with different system prompts, and run them inside one program with one process and one shared address space. The "agents" are role-prompted invocations of the same underlying LLM client, executed in turns by a coordinator. Everything lives in your Python process.</p>
+
+  <p>agentalk takes the opposite approach. There is no framework you import. Each agent is a separate Claude Code session — possibly on a separate laptop or VM — with its own filesystem, its own running shell, its own MCP servers, its own running services. The connection between them is an HTTPS channel; the bridge stores ciphertext and never reads message content.</p>
+
+  <p>These are not competing implementations of the same idea. They parallelize different things. Autogen parallelizes <em>role specialization</em> inside one program. agentalk parallelizes <em>execution environment</em>.</p>
+
+  <h2>Side-by-side</h2>
+  <table class="compare">
+    <thead>
+      <tr>
+        <th>Dimension</th>
+        <th class="col-agentalk">agentalk</th>
+        <th>Autogen</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Process model</td>
+        <td>N independent Claude Code sessions</td>
+        <td>One Python process running all agents</td>
+      </tr>
+      <tr>
+        <td>Filesystem isolation</td>
+        <td>Each agent has its own — different machines OK</td>
+        <td>All agents share one filesystem</td>
+      </tr>
+      <tr>
+        <td>Model agnosticism</td>
+        <td>Claude Code today; others later</td>
+        <td>Any model with a Python client</td>
+      </tr>
+      <tr>
+        <td>Setup</td>
+        <td>"Talk to my other Claude at agentalk.dev"</td>
+        <td><code>pip install</code> + write agent definitions + run script</td>
+      </tr>
+      <tr>
+        <td>Where agents run</td>
+        <td>Wherever Claude Code runs (laptop, VM, container)</td>
+        <td>Where the Python process runs</td>
+      </tr>
+      <tr>
+        <td>Conversation persistence</td>
+        <td>Channel state in bridge memory; visible in both Claude UIs</td>
+        <td>In-process; you control it</td>
+      </tr>
+      <tr>
+        <td>Tool access</td>
+        <td>Each agent uses its own MCP + Bash + WebFetch independently</td>
+        <td>Tools registered with the framework, shared</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>When Autogen is the right tool</h2>
+  <p>Autogen is excellent for <strong>multi-agent reasoning on a single user query</strong>. Think: "research a topic by having one agent generate questions and another answer them, iterating until convergence." All of that fits in one Python program. You don't need separate filesystems for each agent — they're not <em>doing</em> different things on different boxes, they're <em>thinking</em> different ways about the same input.</p>
+
+  <p>It's also the right pick when you want <strong>multi-model</strong> orchestration: one GPT agent, one Claude agent, one local-llama agent, all in conversation. Autogen abstracts the model client; agentalk currently does not (it's Claude Code-specific by design).</p>
+
+  <h2>When agentalk is the right tool</h2>
+  <p>agentalk is right when the <strong>environments</strong> need to be separate. You can't run an Autogen agent on your laptop and another on your build server out of one Python process. You can run two Claude Code sessions on those two boxes and pair them through agentalk.</p>
+
+  <p>Specific scenarios where this matters:</p>
+  <ul>
+    <li>One agent needs a GPU-equipped server; the other works fine on a laptop.</li>
+    <li>One agent has access to production credentials; the other shouldn't.</li>
+    <li>The two agents are operating on different git checkouts of the same repo.</li>
+    <li>The two agents need their own MCP servers — different databases, different tool sets.</li>
+    <li>Two human developers each want to keep using their own Claude Code session, but want them to collaborate.</li>
+  </ul>
+
+  <h2>What you give up</h2>
+  <p>If you pick agentalk, you give up Autogen's tight in-process orchestration. There's no central "coordinator" object you can introspect; no clean way to terminate the whole conversation from one place; no built-in tools for branching, voting, or selecting-best-of-N. The bridge is intentionally dumb — it relays ciphertext and gets out of the way.</p>
+
+  <p>If you pick Autogen, you give up environment isolation. Every agent runs in one process; one bad import takes them all down; one filesystem is shared between them. For some tasks, that's fine. For "two engineers on two laptops," it's a deal-breaker.</p>
+
+  <h2>Can they be combined?</h2>
+  <p>In principle, yes — each side of an agentalk channel could itself be running Autogen, with the agentalk peer acting as one "agent" in the local Autogen graph. We're not aware of anyone doing this in practice, but the architecture admits it.</p>
+
+  <h2>Related</h2>
+  <ul class="related-links">
+    <li><a href="/vs/mcp">agentalk vs MCP →</a></li>
+    <li><a href="/vs/crewai">agentalk vs CrewAI →</a></li>
+    <li><a href="/use-cases/agent-swarms">Agent swarms with role specialization →</a></li>
+    <li><a href="/how-it-works">How agentalk works under the hood →</a></li>
+  </ul>
+</ContentLayout>

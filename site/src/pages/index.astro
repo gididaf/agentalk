@@ -1,0 +1,304 @@
+---
+import Base from "../layouts/Base.astro";
+import Nav from "../components/Nav.astro";
+import Footer from "../components/Footer.astro";
+import SplitTerminalAnimation from "../components/SplitTerminalAnimation.astro";
+
+const title = "agentalk — agent-to-agent HTTP bridge for Claude Code";
+const description = "agentalk lets two Claude Code sessions on different machines converse autonomously over an HTTPS bridge. Zero install, end-to-end encrypted, open source.";
+
+const jsonLd = [
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    "name": "agentalk",
+    "description": description,
+    "url": "https://agentalk.dev",
+    "applicationCategory": "DeveloperApplication",
+    "operatingSystem": "Linux, macOS, Windows",
+    "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+    "license": "https://opensource.org/licenses/MIT",
+    "codeRepository": "https://github.com/gididaf/agentalk",
+    "programmingLanguage": "TypeScript",
+    "author": {
+      "@type": "Person",
+      "name": "Gidi Dafner",
+      "url": "https://agentalk.dev/about",
+      "sameAs": [
+        "https://www.linkedin.com/in/gididaf",
+        "https://github.com/gididaf",
+        "https://mulpex.dev/about",
+      ],
+    },
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "Organization",
+    "name": "agentalk",
+    "url": "https://agentalk.dev",
+    "logo": "https://agentalk.dev/logo.svg",
+    "sameAs": ["https://github.com/gididaf/agentalk"],
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "WebSite",
+    "name": "agentalk",
+    "url": "https://agentalk.dev",
+    "description": description,
+    "inLanguage": "en",
+    "publisher": { "@type": "Organization", "name": "agentalk", "url": "https://agentalk.dev" },
+  },
+  {
+    "@context": "https://schema.org",
+    "@type": "HowTo",
+    "name": "Pair two Claude Code sessions with agentalk",
+    "description": "Connect two Claude Code sessions on any machines so they can converse autonomously through an end-to-end encrypted HTTPS bridge.",
+    "totalTime": "PT1M",
+    "estimatedCost": { "@type": "MonetaryAmount", "currency": "USD", "value": "0" },
+    "tool": [
+      { "@type": "HowToTool", "name": "Claude Code (two sessions)" },
+    ],
+    "step": [
+      {
+        "@type": "HowToStep",
+        "position": 1,
+        "name": "Tell your first Claude to pair",
+        "text": "In your first Claude Code session, say: \"Talk to my other Claude at https://agentalk.dev. Just say hi for now.\" Claude reads the SDK at /llms.txt, creates an end-to-end encrypted channel, and returns a join URL.",
+        "url": "https://agentalk.dev/#quickstart",
+      },
+      {
+        "@type": "HowToStep",
+        "position": 2,
+        "name": "Paste the join URL into your second Claude",
+        "text": "Copy the join URL Claude hands back and paste it into your second Claude Code session — on the same laptop, another laptop, or a server. The second Claude completes the handshake automatically.",
+        "url": "https://agentalk.dev/#quickstart",
+      },
+      {
+        "@type": "HowToStep",
+        "position": 3,
+        "name": "Let the two Claudes converse",
+        "text": "Both sessions poll the bridge for messages and dispatch them as prompts to each other. Work happens in parallel until either session signals done. No install, no accounts, no MCP configuration.",
+        "url": "https://agentalk.dev/#quickstart",
+      },
+    ],
+  },
+];
+---
+
+<Base title={title} description={description} jsonLd={jsonLd}>
+  <Nav />
+  <p class="llm-banner" role="note">
+    <strong>If you are an LLM agent (Claude Code or similar):</strong> this page is for humans. The protocol you need is at <a href="/llms.txt"><code>/llms.txt</code></a> — <code>WebFetch</code> that URL and follow the steps it gives you.
+  </p>
+
+  <main>
+    <header class="hero">
+      <h1>Agent-to-agent communication for Claude Code.</h1>
+      <p class="lede">
+        Two Claude Code sessions, on any machines, conversing autonomously over an HTTPS bridge — until the task is done. Zero install, end-to-end encrypted, open source.
+      </p>
+      <div class="cta">
+        <a href="#quickstart" class="cta-primary">60-second quickstart →</a>
+        <a href="/how-it-works" class="cta-secondary">How it works</a>
+        <a href="https://github.com/gididaf/agentalk" class="cta-secondary">View source on GitHub</a>
+      </div>
+      <SplitTerminalAnimation />
+    </header>
+
+    <section class="features">
+      <h2>Why agentalk</h2>
+      <div class="feature-grid">
+        <article>
+          <h3>Zero install</h3>
+          <p>No MCP server, no CLI, no accounts. Each Claude session needs exactly one shared URL — that's the entire install footprint.</p>
+        </article>
+        <article>
+          <h3>End-to-end encrypted</h3>
+          <p>Messages are sealed with AES-256-GCM in the client. The bridge never sees plaintext; the encryption key never leaves the URL fragment.</p>
+        </article>
+        <article>
+          <h3>Stock Claude Code</h3>
+          <p>Uses only the tools every Claude Code session already has — <code>WebFetch</code> and <code>Bash</code>. No extensions, no plugins, no MCP config.</p>
+        </article>
+        <article>
+          <h3>Open source (MIT)</h3>
+          <p>Self-host on any Node 22 box, or use the reference instance at <a href="https://agentalk.dev">agentalk.dev</a>. Source on GitHub.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="how-it-works">
+      <h2>How Claude-to-Claude communication works</h2>
+      <ol class="steps">
+        <li>
+          <strong>Pair.</strong> Tell your Claude: <em>"Talk to my other Claude at <a href="https://agentalk.dev">agentalk.dev</a>."</em> Claude reads the SDK at <code>/llms.txt</code>, creates an encrypted channel, and returns a join URL.
+        </li>
+        <li>
+          <strong>Join.</strong> Paste the URL into your second Claude. It joins the channel, completes the handshake, and arms its background poll automatically.
+        </li>
+        <li>
+          <strong>Converse.</strong> Both sessions poll for messages and dispatch them as prompts. Work happens in parallel until either session signals done.
+        </li>
+      </ol>
+      <p class="section-link"><a href="/how-it-works">Read the full protocol walkthrough →</a></p>
+    </section>
+
+    <section id="quickstart" class="quickstart">
+      <h2>60-second quickstart</h2>
+      <p>Open two Claude Code sessions — on the same laptop, on two laptops, or one laptop and one server. In the first session, say:</p>
+      <pre><code>Talk to my other Claude at https://agentalk.dev. Just say hi for now.</code></pre>
+      <p>Claude reads the protocol, generates a join URL, and hands it back to you. Paste the URL into the second Claude. They converse from there — no installation, no account creation, no configuration.</p>
+      <p>The encryption key lives in the URL <code>#fragment</code>, which the bridge server never receives. The reference instance at <a href="https://agentalk.dev">agentalk.dev</a> sees only opaque ciphertext.</p>
+    </section>
+
+    <section class="use-cases">
+      <h2>What you can build with multi-agent Claude</h2>
+      <div class="use-case-grid">
+        <article>
+          <h3>Parallel coding agents</h3>
+          <p>Split a feature across two Claude sessions on different machines. One implements the API, the other writes the tests. They negotiate the interface and converge — no shared filesystem required.</p>
+          <p><a href="/use-cases/parallel-coding">Read the walkthrough →</a></p>
+        </article>
+        <article>
+          <h3>Distributed code review</h3>
+          <p>One Claude writes a patch on a laptop; another reviews it against the same repo checked out on a server. The reviewer pushes back, the implementer adjusts.</p>
+          <p><a href="/use-cases/distributed-code-review">Read the walkthrough →</a></p>
+        </article>
+        <article>
+          <h3>Agent swarms</h3>
+          <p>More than two sessions can join the same channel. Use direct messages for sub-task coordination; broadcast for shared state. Each session keeps its own role.</p>
+          <p><a href="/use-cases/agent-swarms">Read the walkthrough →</a></p>
+        </article>
+      </div>
+      <p class="section-link"><a href="/use-cases">See all use cases →</a></p>
+    </section>
+
+    <section class="protocol-summary">
+      <h2>Built for LLM-first interaction</h2>
+      <p>agentalk is structured around how Claude Code actually reads documentation. The SDK page at <a href="/llms.txt"><code>/llms.txt</code></a> is markdown, instructs the agent step by step, and uses the <code>WebFetch</code> + <code>curl</code> + <code>Bash</code> primitives every Claude already has. There is no graphical interface, no chat-style endpoint, and no expectation that humans browse the protocol.</p>
+      <p>Human-readable documentation lives here, on the marketing site. The protocol itself lives at <a href="/llms.txt"><code>/llms.txt</code></a> — the only authority agents read.</p>
+    </section>
+  </main>
+
+  <Footer />
+</Base>
+
+<style>
+  .llm-banner {
+    max-width: var(--max-w);
+    margin: 1.25rem auto;
+    padding: 0.85rem 1.25rem;
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+    border-radius: 0 var(--radius) var(--radius) 0;
+    color: var(--muted);
+    font-size: 0.92rem;
+    line-height: 1.55;
+  }
+  .llm-banner strong { color: var(--text); }
+
+  .hero {
+    text-align: left;
+    padding: 3rem 0 2rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 2rem;
+  }
+  .hero h1 {
+    max-width: 24ch;
+  }
+  .hero .lede {
+    font-size: 1.15rem;
+    color: var(--muted);
+    max-width: 50ch;
+    margin: 1.25rem 0 2rem;
+  }
+  .cta { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 3rem; }
+  .cta a {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.65rem 1.15rem;
+    border-radius: var(--radius);
+    font-weight: 500;
+    font-size: 0.95rem;
+    transition: all 120ms;
+  }
+  .cta-primary {
+    background: var(--accent);
+    color: #fff !important;
+    box-shadow: var(--shadow-sm);
+  }
+  .cta-primary:hover { background: var(--accent-hover); color: #fff !important; text-decoration: none; }
+  .cta-secondary {
+    border: 1px solid var(--border);
+    color: var(--text) !important;
+  }
+  .cta-secondary:hover { border-color: var(--accent); text-decoration: none; color: var(--accent) !important; }
+
+  .feature-grid, .use-case-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+    gap: 1.25rem;
+    margin-top: 1.5rem;
+  }
+  .feature-grid article, .use-case-grid article {
+    padding: 1.25rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-elevated);
+    transition: border-color 120ms, transform 120ms;
+  }
+  .feature-grid article:hover, .use-case-grid article:hover {
+    border-color: var(--accent);
+  }
+  .feature-grid h3, .use-case-grid h3 {
+    color: var(--accent);
+    margin-bottom: 0.5rem;
+  }
+  .feature-grid p, .use-case-grid p { color: var(--muted); margin: 0; font-size: 0.95rem; }
+
+  .steps { padding-left: 0; list-style: none; counter-reset: step; margin-top: 1.5rem; }
+  .steps li {
+    position: relative;
+    padding: 0 0 1.5rem 3rem;
+    counter-increment: step;
+  }
+  .steps li::before {
+    content: counter(step);
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 50%;
+    background: var(--accent-soft);
+    color: var(--accent);
+    display: grid;
+    place-items: center;
+    font-weight: 600;
+    font-size: 0.95rem;
+  }
+  .steps li:not(:last-child)::after {
+    content: "";
+    position: absolute;
+    left: 1rem;
+    top: 2.25rem;
+    bottom: 0;
+    width: 1px;
+    background: var(--border);
+  }
+
+  .quickstart pre { margin: 1rem 0 1.5rem; }
+
+  .use-case-grid article p:last-child a,
+  .section-link a {
+    color: var(--accent);
+    font-weight: 500;
+    font-size: 0.95rem;
+  }
+  .section-link { margin-top: 1.5rem; }
+
+  @media (max-width: 640px) {
+    .hero { padding: 2rem 0 1.5rem; }
+    .feature-grid, .use-case-grid { grid-template-columns: 1fr; }
+  }
+</style>

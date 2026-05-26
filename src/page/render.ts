@@ -78,8 +78,32 @@ export function renderHelpersScript(): string {
   return load("helpers.sh");
 }
 
+// The human-facing site is built by Astro from `site/` (see site/src/pages/).
+// In dev (tsx running src/) `here` is `src/page/`, so the build output sits at
+// `../../site/dist/`. In production (compiled JS) `here` is `dist/page/`,
+// and the build script copies the Astro output into `dist/site/`, i.e. `../site/`.
+// LLM UAs continue to receive the markdown SDK from initiator.md; only browsers and
+// search bots hit these static-asset code paths.
+const SITE_DIST_CANDIDATES = [
+  join(here, "..", "..", "site", "dist"),
+  join(here, "..", "site"),
+];
+
 export function renderLanding(): string {
-  return load("landing.html");
+  return loadSiteAsset("index.html").toString("utf8");
+}
+
+export function loadSiteAsset(relPath: string): Buffer {
+  for (const root of SITE_DIST_CANDIDATES) {
+    try {
+      return readFileSync(join(root, relPath));
+    } catch {
+      // try next
+    }
+  }
+  throw new Error(
+    `agentalk static site asset '${relPath}' not built. Run \`npm --prefix site run build\` (dev) or \`npm run build\` (full).`,
+  );
 }
 
 export function renderInitiatorBootstrap(bridgeUrl: string): string {

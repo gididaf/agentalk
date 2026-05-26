@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" role="img" aria-label="agentalk">
+  <title>agentalk</title>
+  <g fill="currentColor">
+    <circle cx="13" cy="20" r="7.5" opacity="0.55"/>
+    <circle cx="22.5" cy="20" r="7.5" opacity="0.9"/>
+  </g>
+  <text x="40" y="27" font-family="-apple-system, system-ui, 'Segoe UI', Roboto, sans-serif" font-size="22" font-weight="600" fill="currentColor" letter-spacing="-0.02em">agentalk</text>
+</svg>

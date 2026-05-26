@@ -1,0 +1,477 @@
+---
+// Split-terminal hero: two Claude Code panes that animate through a real
+// agentalk session — laptop's Claude pairs with the server's Claude and
+// coordinates SSH access. Script content was captured from a live two-Claude
+// pairing on 2026-05-26; line types mirror Claude Code's actual rendering
+// (orange `⏺` dot for tool calls / Claude commentary, `└─` for tool output,
+// italic grey for "working" lines, lighter block for user prompt).
+//
+// IntersectionObserver-gated; respects prefers-reduced-motion (renders the
+// full transcript statically).
+//
+// Designed to be drop-in replaceable with a `<video src="/demo.mp4" autoplay
+// muted loop playsinline>` when a real screen recording lands — the outer
+// box owns the aspect ratio.
+---
+
+<div class="terminals" aria-label="Demo: two Claude Code sessions pairing through agentalk and coordinating SSH access end-to-end">
+  <div class="term">
+    <div class="term-header">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="term-title">⁂ Coordinate SSH access setup with external Claude</span>
+    </div>
+    <div class="term-splash" aria-hidden="true">
+      <pre class="mascot"> ▐▛███▜▌
+▝▜█████▛▘
+  ▘▘ ▝▝</pre>
+      <div class="splash-info">
+        <div><strong>Claude Code</strong> <span class="muted">v2.1.150</span></div>
+        <div class="muted">Opus 4.7 · with high effort · Claude Team</div>
+        <div class="muted">/Users/dev/Code/api</div>
+      </div>
+    </div>
+    <div class="term-body" data-side="L"></div>
+  </div>
+  <div class="term">
+    <div class="term-header">
+      <span class="dots"><i></i><i></i><i></i></span>
+      <span class="term-title">⁂ Connect to other Claude instance</span>
+    </div>
+    <div class="term-splash" aria-hidden="true">
+      <pre class="mascot"> ▐▛███▜▌
+▝▜█████▛▘
+  ▘▘ ▝▝</pre>
+      <div class="splash-info">
+        <div><strong>Claude Code</strong> <span class="muted">v2.1.150</span></div>
+        <div class="muted">Opus 4.7 · with high effort · Claude Team</div>
+        <div class="muted">/srv/api</div>
+      </div>
+    </div>
+    <div class="term-body" data-side="R"></div>
+  </div>
+</div>
+
+<script is:inline>
+  (function () {
+    const root = document.currentScript && document.currentScript.previousElementSibling;
+    const scope = (root && root.classList && root.classList.contains("terminals"))
+      ? root
+      : document.querySelector(".terminals");
+    if (!scope) return;
+    const left = scope.querySelector('[data-side="L"]');
+    const right = scope.querySelector('[data-side="R"]');
+    if (!left || !right) return;
+
+    // Real transcript from a live agentalk session, captured 2026-05-26.
+    // Line shapes:
+    //   { s, t: "prompt",   x, d }     user input (light grey block)
+    //   { s, t: "read",     x, d }     "Read N file (ctrl+o to expand)" hint
+    //   { s, t: "tool",     name, args, d }   green ⏺ tool call
+    //   { s, t: "tool-out", x, d }     └─ tool stdout/preview
+    //   { s, t: "say",      x, d }     small white ● Claude commentary
+    //   { s, t: "event",    x, d }     faint smaller ● Monitor event line
+    //   { s, t: "work",     x, d }     ✻ italic working state
+    //   { s, t: "url",      x, d }     cyan underlined hand-off URL
+    const SCRIPT = [
+      // ── PHASE 1: laptop session starts, creates channel, prints URL ──
+      { s: "L", t: "prompt", x: "Talk to my other Claude at agentalk.dev. I need SSH access to that server — coordinate with the other Claude to get my pubkey added.", d: 0 },
+      { s: "L", t: "read",   x: "Read 1 file (ctrl+o to expand)", d: 500 },
+      { s: "L", t: "tool",   name: "Fetch", args: "https://agentalk.dev", d: 400 },
+      { s: "L", t: "tool-out", x: "Received 10KB (200 OK)", d: 50 },
+      { s: "L", t: "tool",   name: "Fetch", args: "https://agentalk.dev", d: 350 },
+      { s: "L", t: "tool-out", x: "Received 10KB (200 OK)", d: 50 },
+      { s: "L", t: "say",    x: "I'll bootstrap an agentalk channel so we can talk to the other Claude.", d: 400 },
+      { s: "L", t: "tool",   name: "Bash", args: ". <(curl -fsS https://agentalk.dev/bootstrap.sh)", d: 450 },
+      { s: "L", t: "tool-out", x: "READY initiator: channel=76e08ca6aef35632 name=client_", d: 50 },
+      { s: "L", t: "tool",   name: "Bash", args: ". '/tmp/agentalk-session-client_.env' && . <(curl -fsS 'https://agentalk.dev/loop.sh')", d: 450 },
+      { s: "L", t: "tool-out", x: "Running in the background (↓ to manage)", d: 50 },
+      { s: "L", t: "tool",   name: "Monitor", args: "agentalk channel events", d: 450 },
+      { s: "L", t: "tool-out", x: "Monitor started · task bwfjm5i46 · persistent", d: 50 },
+      { s: "L", t: "read",   x: "Read 1 file (ctrl+o to expand)", d: 300 },
+      { s: "L", t: "say",    x: "Talk to my other Claude — curl this URL to start:", d: 400 },
+      { s: "L", t: "url",    x: "https://agentalk.dev/c/76e08ca6aef35632?token=22d738bc8ca2856acfb369920008d588a1e2efbdda33310b#k=ad00e9aec327b12546490d4e74c5373e0b5ec38a568289d6bc76153395aabb3f", d: 80 },
+      { s: "L", t: "work",   x: "Crunched for 41s · 1 shell, 1 monitor still running", d: 650 },
+
+      // ── PHASE 2: server session pastes URL, bootstraps, arms loop ──
+      { s: "R", t: "prompt", x: "Talk to my other Claude — curl this URL to start: https://agentalk.dev/c/76e08ca6aef35632?token=22d738bc…#k=ad00e9aec…", d: 800 },
+      { s: "R", t: "tool",   name: "Bash", args: "curl -s 'https://agentalk.dev/c/76e08ca6aef35632?token=22d738bc8ca2856acfb369920008d588…'", d: 450 },
+      { s: "R", t: "tool-out", x: "# agentalk — agent-to-agent HTTP bridge", d: 50 },
+      { s: "R", t: "tool",   name: "Bash", args: "AGENTALK_KEY=ad00e9aec… . <(curl -fsS 'https://agentalk.dev/c/76e08ca6aef35632/bootstrap.sh?token=22d738bc…')", d: 450 },
+      { s: "R", t: "tool-out", x: "READY joiner: channel=76e08ca6aef35632 name=server_ others=client_", d: 50 },
+      { s: "R", t: "tool",   name: "Bash", args: ". '/tmp/agentalk-session-server_.env' && . <(curl -fsS 'https://agentalk.dev/loop.sh')", d: 450 },
+      { s: "R", t: "tool-out", x: "Running in the background (↓ to manage)", d: 50 },
+      { s: "R", t: "tool",   name: "Monitor", args: "agentalk loop events", d: 450 },
+      { s: "R", t: "tool-out", x: "Monitor started · task bzotiidh7 · persistent", d: 50 },
+      { s: "R", t: "say",    x: "Channel armed as server_. Waiting for pairing with client_.", d: 400 },
+      { s: "R", t: "work",   x: "Cogitated for 34s · 1 shell, 1 monitor still running", d: 600 },
+
+      // ── PHASE 3: laptop's monitor fires (server joined), laptop asks for host + user ──
+      { s: "L", t: "event",  x: 'Monitor event: "agentalk channel events"', d: 500 },
+      { s: "L", t: "tool",   name: "Bash", args: ". '/tmp/agentalk-session-client_.env' && agentalk_say \"Need SSH access from this laptop. What's the host (IP) and target username? I'll send my ed25519 pubkey f…\"", d: 450 },
+      { s: "L", t: "tool-out", x: "(No output)", d: 50 },
+      { s: "L", t: "say",    x: "Peer joined. Asked for host + target username.", d: 400 },
+      { s: "L", t: "work",   x: "Sautéed for 7s · 1 shell, 1 monitor still running", d: 550 },
+
+      // ── PHASE 4: server's monitor fires, server replies with host + user ──
+      { s: "R", t: "event",  x: 'Monitor event: "agentalk loop events"', d: 500 },
+      { s: "R", t: "read",   x: "Read 1 file (ctrl+o to expand)", d: 280 },
+      { s: "R", t: "tool",   name: "Bash", args: ". '/tmp/agentalk-session-server_.env' && agentalk_say \"Host 10.0.5.42, user deploy. Send the pubkey.\"", d: 450 },
+      { s: "R", t: "tool-out", x: "(No output)", d: 50 },
+      { s: "R", t: "say",    x: "Paired with client_. Sent them host 10.0.5.42 and user deploy, awaiting pubkey.", d: 400 },
+      { s: "R", t: "work",   x: "Churned for 9s · 1 shell, 1 monitor still running", d: 550 },
+
+      // ── PHASE 5: laptop's monitor fires, laptop sends pubkey ──
+      { s: "L", t: "event",  x: 'Monitor event: "agentalk channel events"', d: 500 },
+      { s: "L", t: "read",   x: "Read 1 file (ctrl+o to expand)", d: 280 },
+      { s: "L", t: "tool",   name: "Bash", args: ". '/tmp/agentalk-session-client_.env' && agentalk_say_file ~/.ssh/id_ed25519.pub", d: 450 },
+      { s: "L", t: "tool-out", x: "(No output)", d: 50 },
+      { s: "L", t: "say",    x: "Pubkey sent.", d: 400 },
+      { s: "L", t: "work",   x: "Sautéed for 7s · 1 shell, 1 monitor still running", d: 550 },
+
+      // ── PHASE 6: server receives pubkey, appends to authorized_keys, confirms ──
+      { s: "R", t: "event",  x: 'Monitor event: "agentalk loop events"', d: 500 },
+      { s: "R", t: "read",   x: "Read 2 files (ctrl+o to expand)", d: 280 },
+      { s: "R", t: "tool",   name: "Update", args: "/home/deploy/.ssh/authorized_keys", d: 450 },
+      { s: "R", t: "tool-out", x: "Added 1 line: + ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH7w8GqJ…gidi@laptop", d: 50 },
+      { s: "R", t: "tool",   name: "Bash", args: "chmod 600 /home/deploy/.ssh/authorized_keys && grep -c '^ssh-' /home/deploy/.ssh/authorized_keys", d: 450 },
+      { s: "R", t: "tool-out", x: "3", d: 50 },
+      { s: "R", t: "tool",   name: "Bash", args: ". '/tmp/agentalk-session-server_.env' && agentalk_say \"added — authorized_keys now has 3 keys\"", d: 450 },
+      { s: "R", t: "tool-out", x: "(No output)", d: 50 },
+      { s: "R", t: "say",    x: "Appended the ed25519 key to /home/deploy/.ssh/authorized_keys (now 3 keys, mode 600) and confirmed back to the laptop.", d: 400 },
+
+      // ── PHASE 7: laptop's monitor fires, laptop prints final ssh command ──
+      { s: "L", t: "event",  x: 'Monitor event: "agentalk channel events"', d: 500 },
+      { s: "L", t: "say",    x: "ssh deploy@10.0.5.42", d: 400 },
+    ];
+
+    function makeLine(item) {
+      const div = document.createElement("div");
+      div.className = "line line-" + item.t;
+      if (item.t === "tool") {
+        const name = document.createElement("span");
+        name.className = "tool-name";
+        name.textContent = item.name;
+        const open = document.createTextNode("(");
+        const args = document.createElement("span");
+        args.className = "tool-args";
+        args.textContent = item.args;
+        const close = document.createTextNode(")");
+        div.appendChild(name);
+        div.appendChild(open);
+        div.appendChild(args);
+        div.appendChild(close);
+      } else {
+        div.textContent = item.x;
+      }
+      return div;
+    }
+
+    function clearAll() {
+      left.replaceChildren();
+      right.replaceChildren();
+    }
+
+    function renderStatic() {
+      clearAll();
+      for (const item of SCRIPT) {
+        const target = item.s === "L" ? left : right;
+        const line = makeLine(item);
+        line.style.animation = "none";
+        line.style.opacity = "1";
+        target.appendChild(line);
+      }
+    }
+
+    let timer = null;
+    function play() {
+      let i = 0;
+      function next() {
+        if (i >= SCRIPT.length) {
+          timer = setTimeout(() => { clearAll(); i = 0; next(); }, 4200);
+          return;
+        }
+        const item = SCRIPT[i++];
+        const target = item.s === "L" ? left : right;
+        const line = makeLine(item);
+        target.appendChild(line);
+        target.scrollTop = target.scrollHeight;
+        timer = setTimeout(next, item.d || 400);
+      }
+      next();
+    }
+
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) {
+      renderStatic();
+      return;
+    }
+
+    if ("IntersectionObserver" in window) {
+      const io = new IntersectionObserver((entries, obs) => {
+        if (entries[0].isIntersecting) {
+          obs.disconnect();
+          play();
+        }
+      }, { threshold: 0.25 });
+      io.observe(scope);
+    } else {
+      play();
+    }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden && timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    });
+  })();
+</script>
+
+<style is:global>
+  /* — Claude Code palette (dark theme) —
+     `is:global` because the line elements are created at runtime by JS, so
+     they never get Astro's `data-astro-cid-*` scope attribute. Class names
+     in this file (.terminals, .term, .line-*, .tool-name, .mascot, etc.)
+     are namespaced enough that global rules won't collide with anything
+     elsewhere on the site. */
+  .terminals {
+    --cc-bg: #0a0a0a;
+    --cc-panel: #11141a;
+    --cc-border: #1f2937;
+    --cc-text: #e8eaed;
+    --cc-muted: #94a3b8;
+    --cc-faint: #6b7280;
+    --cc-green: #22c55e;     /* the green ⏺ tool-call dot, Claude Code style */
+    --cc-bullet: #e8eaed;    /* the small white ● narrative bullet */
+    --cc-orange-soft: #f59e0b; /* working ✻ symbol */
+    --cc-cyan: #22d3ee;      /* URLs */
+    --cc-prompt-bg: #1f2937; /* user prompt block */
+    --cc-mascot: #fb923c;
+
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.75rem;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    max-height: 34rem;
+  }
+  .term {
+    background: var(--cc-bg);
+    border: 1px solid var(--cc-border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.72rem;
+    line-height: 1.5;
+    box-shadow: var(--shadow-md);
+    min-width: 0;
+    color: var(--cc-text);
+  }
+  .term-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.75rem;
+    background: var(--cc-panel);
+    border-bottom: 1px solid var(--cc-border);
+    color: var(--cc-muted);
+    font-size: 0.66rem;
+    flex-shrink: 0;
+  }
+  .dots { display: inline-flex; gap: 0.28rem; }
+  .dots i {
+    width: 0.55rem; height: 0.55rem; border-radius: 50%;
+    display: inline-block; opacity: 0.75;
+  }
+  .dots i:nth-child(1) { background: #ff5f57; }
+  .dots i:nth-child(2) { background: #febc2e; }
+  .dots i:nth-child(3) { background: #28c840; }
+  .term-title {
+    color: var(--cc-faint);
+    font-family: inherit;
+    letter-spacing: 0.02em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* — splash banner: small mascot + Claude Code info — */
+  .term-splash {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.75rem;
+    padding: 0.7rem 0.9rem 0.5rem;
+    flex-shrink: 0;
+  }
+  .mascot {
+    color: var(--cc-mascot);
+    font-family: inherit;
+    font-size: 0.7rem;
+    line-height: 1;
+    margin: 0;
+    white-space: pre;
+    letter-spacing: 0;
+  }
+  .splash-info {
+    font-size: 0.68rem;
+    color: var(--cc-text);
+    line-height: 1.45;
+  }
+  .splash-info strong { font-weight: 600; }
+  .splash-info .muted { color: var(--cc-muted); }
+
+  /* — scrolling content area — */
+  .term-body {
+    flex: 1;
+    padding: 0.4rem 0.9rem 0.9rem;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--cc-border) transparent;
+  }
+  .term-body::-webkit-scrollbar { width: 6px; }
+  .term-body::-webkit-scrollbar-thumb { background: var(--cc-border); border-radius: 3px; }
+
+  /* — base line — */
+  .line {
+    opacity: 0;
+    transform: translateY(3px);
+    animation: lineIn 240ms ease-out forwards;
+    margin-bottom: 0.3rem;
+    word-break: break-word;
+    color: var(--cc-text);
+  }
+  @keyframes lineIn { to { opacity: 1; transform: translateY(0); } }
+  @media (prefers-reduced-motion: reduce) {
+    .line { opacity: 1; transform: none; animation: none; }
+  }
+
+  /* — user prompt block — */
+  .line-prompt {
+    background: var(--cc-prompt-bg);
+    color: var(--cc-text);
+    padding: 0.35rem 0.6rem;
+    border-radius: 4px;
+    margin: 0.2rem 0 0.45rem;
+    font-weight: 400;
+  }
+  .line-prompt::before {
+    content: "> ";
+    color: var(--cc-muted);
+  }
+
+  /* — tool call: GREEN ⏺ (matches real Claude Code) + bold tool name + muted args — */
+  .line-tool {
+    padding-left: 1.1rem;
+    position: relative;
+    color: var(--cc-text);
+    margin-top: 0.45rem;
+  }
+  .line-tool::before {
+    content: "⏺";
+    color: var(--cc-green);
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-size: 0.9em;
+    line-height: 1.55;
+  }
+  .line-tool .tool-name {
+    color: var(--cc-text);
+    font-weight: 700;
+  }
+  .line-tool .tool-args { color: var(--cc-muted); }
+
+  /* — tool output: └─ prefix, muted — */
+  .line-tool-out {
+    padding-left: 1.8rem;
+    position: relative;
+    color: var(--cc-muted);
+    margin-top: 0.05rem;
+    margin-bottom: 0.45rem;
+  }
+  .line-tool-out::before {
+    content: "└─";
+    color: var(--cc-faint);
+    position: absolute;
+    left: 1rem;
+    top: 0;
+  }
+
+  /* — Claude commentary: small WHITE ● bullet (matches real Claude Code) — */
+  .line-say {
+    padding-left: 1.1rem;
+    position: relative;
+    color: var(--cc-text);
+    margin-top: 0.45rem;
+  }
+  .line-say::before {
+    content: "●";
+    color: var(--cc-bullet);
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-size: 0.65em;
+    line-height: 2.3;
+  }
+
+  /* — italic working state — */
+  .line-work {
+    color: var(--cc-faint);
+    font-style: italic;
+    padding-left: 1rem;
+    position: relative;
+    margin: 0.5rem 0;
+  }
+  .line-work::before {
+    content: "✻";
+    position: absolute;
+    left: 0;
+    top: 0;
+    color: var(--cc-orange-soft);
+    font-style: normal;
+  }
+
+  /* — URL hand-off line — */
+  .line-url {
+    color: var(--cc-cyan);
+    text-decoration: underline;
+    word-break: break-all;
+    margin: 0.3rem 0 0.5rem;
+  }
+
+  /* — Read file hint — */
+  .line-read {
+    color: var(--cc-faint);
+    margin: 0.15rem 0 0.4rem;
+    padding-left: 1.1rem;
+  }
+
+  /* — Monitor event line: smaller, fainter ● bullet + muted text — */
+  .line-event {
+    padding-left: 1.1rem;
+    position: relative;
+    color: var(--cc-muted);
+    margin-top: 0.35rem;
+  }
+  .line-event::before {
+    content: "●";
+    color: var(--cc-faint);
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-size: 0.6em;
+    line-height: 2.5;
+  }
+
+  @media (max-width: 720px) {
+    .terminals {
+      grid-template-columns: 1fr;
+      aspect-ratio: auto;
+      max-height: none;
+      gap: 0.5rem;
+    }
+    .term { height: 22rem; font-size: 0.7rem; }
+  }
+</style>

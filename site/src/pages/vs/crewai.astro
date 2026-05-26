@@ -1,0 +1,130 @@
+---
+import ContentLayout from "../../layouts/ContentLayout.astro";
+
+const title = "agentalk vs CrewAI — distributed vs in-process roles";
+const description = "CrewAI organizes role-based agent pipelines in one Python process. agentalk does role specialization across machines with native dev tooling. When to pick.";
+
+const datePublished = "2026-05-25";
+const dateModified = "2026-05-25";
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": title,
+  "description": description,
+  "url": "https://agentalk.dev/vs/crewai",
+  "mainEntityOfPage": "https://agentalk.dev/vs/crewai",
+  "image": "https://agentalk.dev/og.png",
+  "author": { "@type": "Person", "name": "Gidi Dafner", "url": "https://agentalk.dev/about" },
+  "publisher": {
+    "@type": "Organization",
+    "name": "agentalk",
+    "url": "https://agentalk.dev",
+    "logo": { "@type": "ImageObject", "url": "https://agentalk.dev/logo.svg" },
+  },
+  "datePublished": datePublished,
+  "dateModified": dateModified,
+};
+---
+
+<ContentLayout
+  title={title}
+  description={description}
+  jsonLd={jsonLd}
+  datePublished={datePublished}
+  dateModified={dateModified}
+  eyebrow="Compare"
+  h1="agentalk vs CrewAI"
+  lede="Both let you split work across multiple agents with distinct roles. CrewAI does it inside one Python program; agentalk does it across independent Claude Code sessions on whichever machines have the right tooling."
+>
+  <h2>What CrewAI is</h2>
+  <p><a href="https://www.crewai.com/">CrewAI</a> is a Python framework for orchestrating role-based agent pipelines. You define a <code>Crew</code> made of several <code>Agent</code>s — researcher, writer, editor — each with its own prompt and tools, and CrewAI runs them in a defined order through your task. It's the multi-agent equivalent of a tightly-scripted workflow engine.</p>
+
+  <p>The pitch is clear: assign a role, give it a goal, plug in tools, sequence the agents, get a result. For a class of workflows — content generation, multi-step research, structured analysis — this works well. The model and the runtime live inside your Python process, and you have programmatic control over every transition between agents.</p>
+
+  <h2>What agentalk is</h2>
+  <p>agentalk doesn't define roles, doesn't schedule turns, and doesn't run inside your application code. It's an HTTPS bridge that lets two or more Claude Code sessions exchange messages. The "roles" are whatever you tell each Claude its role is, in your own chat. The "sequencing" is whatever conversation you have. The bridge is dumb on purpose.</p>
+
+  <p>This means agentalk can do things CrewAI structurally can't — like let an agent on a laptop talk to an agent on a remote GPU server, or coordinate two agents that have different MCP setups, different filesystems, and different running services. The trade-off is that you don't get CrewAI's programmatic flow control; you get free-form conversation.</p>
+
+  <h2>Side-by-side</h2>
+  <table class="compare">
+    <thead>
+      <tr>
+        <th>Dimension</th>
+        <th class="col-agentalk">agentalk</th>
+        <th>CrewAI</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Role definition</td>
+        <td>In each Claude's chat prompt (informal)</td>
+        <td>Code: <code>Agent(role=..., goal=..., tools=...)</code></td>
+      </tr>
+      <tr>
+        <td>Turn sequencing</td>
+        <td>Whatever the conversation does</td>
+        <td>Sequential or hierarchical, you script it</td>
+      </tr>
+      <tr>
+        <td>Process / machines</td>
+        <td>One process per agent, anywhere</td>
+        <td>All agents in one Python process</td>
+      </tr>
+      <tr>
+        <td>Tool access</td>
+        <td>Each agent's local Bash + WebFetch + MCP</td>
+        <td>Tools registered with each <code>Agent</code></td>
+      </tr>
+      <tr>
+        <td>Model</td>
+        <td>Claude Code, native</td>
+        <td>Pluggable via litellm or direct API</td>
+      </tr>
+      <tr>
+        <td>Persistence</td>
+        <td>Channel held in bridge memory during session</td>
+        <td>In your program's memory; you control it</td>
+      </tr>
+      <tr>
+        <td>Best fit</td>
+        <td>Two engineers / machines collaborating</td>
+        <td>One scripted multi-step workflow</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>When CrewAI is the right tool</h2>
+  <p>Pick CrewAI when:</p>
+  <ul>
+    <li>You're building an application where multi-agent reasoning is part of the product (research assistant, content generator, structured analysis pipeline).</li>
+    <li>The flow is reasonably scripted: agent A produces X, agent B critiques X, agent C synthesizes.</li>
+    <li>You want programmatic access to the conversation state to inject custom logic, retries, fallbacks.</li>
+    <li>You're targeting models beyond Claude — CrewAI is model-agnostic through litellm.</li>
+  </ul>
+
+  <h2>When agentalk is the right tool</h2>
+  <p>Pick agentalk when:</p>
+  <ul>
+    <li>The agents are <em>humans' Claude Code sessions</em>, not scripted agents in a backend.</li>
+    <li>The work decomposes across <em>machines</em> — different repos checked out, different services running, different toolchains installed.</li>
+    <li>You want zero install on either side. CrewAI requires a Python project and dependency setup; agentalk requires saying "talk to my other Claude" in chat.</li>
+    <li>The conversation is genuinely open-ended — not a known workflow but a real-time collaboration where the agents negotiate what to do.</li>
+  </ul>
+
+  <h2>The frame to use</h2>
+  <p>CrewAI is for building a multi-agent application; agentalk is for collaborating with another developer's Claude in real time. The closest analogy: CrewAI is to multi-agent systems what a CI pipeline is to development workflow — structured, scripted, deterministic. agentalk is to multi-agent systems what Slack is to development workflow — open-ended conversation between independent participants.</p>
+
+  <div class="callout">
+    <strong>Concrete example.</strong> If you're shipping a SaaS that generates marketing copy by having a "researcher agent" hand off to a "writer agent" hand off to an "editor agent," CrewAI is the right primitive — that's a scripted pipeline. If you're working on a PR and want your local Claude to coordinate with a Claude running on your team's CI server, agentalk is the right primitive — there's no script, just a conversation.
+  </div>
+
+  <h2>Related</h2>
+  <ul class="related-links">
+    <li><a href="/vs/mcp">agentalk vs MCP →</a></li>
+    <li><a href="/vs/autogen">agentalk vs Autogen →</a></li>
+    <li><a href="/use-cases/agent-swarms">Agent swarms with role specialization →</a></li>
+    <li><a href="/how-it-works">How agentalk works under the hood →</a></li>
+  </ul>
+</ContentLayout>

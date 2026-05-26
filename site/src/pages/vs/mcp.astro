@@ -1,0 +1,116 @@
+---
+import ContentLayout from "../../layouts/ContentLayout.astro";
+
+const title = "agentalk vs MCP — agent-to-agent vs agent-to-tools";
+const description = "MCP gives one agent access to tools; agentalk connects two agents to each other. Different layers of the stack — when to use which, with side-by-side table.";
+
+const datePublished = "2026-05-25";
+const dateModified = "2026-05-25";
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@type": "Article",
+  "headline": title,
+  "description": description,
+  "url": "https://agentalk.dev/vs/mcp",
+  "mainEntityOfPage": "https://agentalk.dev/vs/mcp",
+  "image": "https://agentalk.dev/og.png",
+  "author": { "@type": "Person", "name": "Gidi Dafner", "url": "https://agentalk.dev/about" },
+  "publisher": {
+    "@type": "Organization",
+    "name": "agentalk",
+    "url": "https://agentalk.dev",
+    "logo": { "@type": "ImageObject", "url": "https://agentalk.dev/logo.svg" },
+  },
+  "datePublished": datePublished,
+  "dateModified": dateModified,
+};
+---
+
+<ContentLayout
+  title={title}
+  description={description}
+  jsonLd={jsonLd}
+  datePublished={datePublished}
+  dateModified={dateModified}
+  eyebrow="Compare"
+  h1="agentalk vs Model Context Protocol (MCP)"
+  lede="The two are not competing solutions to the same problem. MCP gives one agent access to external tools. agentalk connects two agents to each other. You can use both at once."
+>
+  <h2>The fundamental difference</h2>
+  <p><a href="https://modelcontextprotocol.io">Model Context Protocol</a> is Anthropic's open standard for plugging tools into an LLM agent. You write an MCP server that exposes a database, a search index, a calendar, a Kubernetes cluster — anything — and Claude Code connects to it. The agent gains a new tool. There's still just one agent.</p>
+
+  <p>agentalk doesn't expose tools. It exposes <em>another agent</em>. Two Claude Code sessions, each on its own machine, with their own MCP servers, their own filesystems, and their own running services, can hold a conversation through agentalk. Neither becomes a tool for the other; they remain peers.</p>
+
+  <p>This is why "agentalk vs MCP" comes up as a question but doesn't have a competitive answer. You can install MCP servers on both sides of an agentalk channel and the two will keep working in parallel — they live at different layers.</p>
+
+  <h2>Side-by-side</h2>
+  <table class="compare">
+    <thead>
+      <tr>
+        <th>Dimension</th>
+        <th class="col-agentalk">agentalk</th>
+        <th>MCP</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Primary purpose</td>
+        <td>Connect two Claude sessions over a channel</td>
+        <td>Expose tools (DB, search, files) to one Claude</td>
+      </tr>
+      <tr>
+        <td>Number of agents</td>
+        <td>≥ 2, by definition</td>
+        <td>1, by definition</td>
+      </tr>
+      <tr>
+        <td>Install footprint</td>
+        <td>None — uses WebFetch + Bash that Claude has</td>
+        <td>Per-tool MCP server + <code>~/.claude/mcp.json</code> entry</td>
+      </tr>
+      <tr>
+        <td>Transport</td>
+        <td>HTTPS long-poll, JSON, ciphertext bodies</td>
+        <td>JSON-RPC over stdio or HTTP</td>
+      </tr>
+      <tr>
+        <td>Encryption</td>
+        <td>AES-256-GCM end-to-end, bridge sees ciphertext only</td>
+        <td>Trust model is per-MCP-server (usually local stdio)</td>
+      </tr>
+      <tr>
+        <td>Can both be used at once?</td>
+        <td colspan="2" style="text-align:center"><strong>Yes</strong> — different layers, no overlap</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>When MCP is the right tool</h2>
+  <p>If your task is <em>"my Claude session needs to read from Postgres"</em> or <em>"my Claude needs to search our knowledge base"</em>, MCP is correct. You write (or install) an MCP server for that resource, list it in your MCP config, and the agent now has the tool. agentalk has nothing useful to add here.</p>
+
+  <p>The Anthropic and community MCP server registries cover most common integrations — databases, file systems, version-controlled repos, observability platforms. If a server exists for what you need, MCP is a one-config-edit away.</p>
+
+  <h2>When agentalk is the right tool</h2>
+  <p>If your task is <em>"I want a second Claude Code session, running on a different machine, with its own toolchain, to work alongside my first one"</em>, MCP doesn't help. There's no MCP server you install that turns Claude session B into a tool for Claude session A — that's a category error. The two need to talk to each other as peers.</p>
+
+  <p>agentalk does exactly that. The pairing is by URL, the channel is encrypted end-to-end, and neither side needs to install anything beyond what Claude Code already ships with.</p>
+
+  <h2>Using both together</h2>
+  <p>The cleanest pattern is to let each agentalk peer keep its own MCP setup. The Claude on your laptop has the MCP servers for your local environment (Postgres, local file search). The Claude on your CI server has its own MCP servers (the deploy tool, the staging cluster). They're paired through agentalk; they pull on each other's MCP tools indirectly, through conversation.</p>
+
+  <div class="callout">
+    <strong>Example.</strong> Your laptop's Claude is asked to add a new column to the users table. It uses its local Postgres MCP to inspect the schema. It writes the migration. Then it asks (via agentalk) the server Claude to apply the migration against staging, which the server Claude does via <em>its</em> deploy MCP. Both MCP setups are involved; agentalk is the conversational glue.
+  </div>
+
+  <h2>What MCP is not</h2>
+  <p>MCP is sometimes pitched as "the universal protocol for everything in agent tooling," which has led to confusion. It is not a multi-agent framework, and it doesn't try to be. It is a clean, well-spec'd way to expose tools to one agent. agentalk picks up where MCP stops.</p>
+
+  <h2>Related</h2>
+  <ul class="related-links">
+    <li><a href="/vs/autogen">agentalk vs Autogen →</a></li>
+    <li><a href="/vs/crewai">agentalk vs CrewAI →</a></li>
+    <li><a href="/how-it-works">How agentalk works (protocol walkthrough) →</a></li>
+    <li><a href="/use-cases">Use cases for multi-agent Claude →</a></li>
+  </ul>
+</ContentLayout>
