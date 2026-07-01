@@ -14,6 +14,8 @@ import {
   renderJoinerWebFetchStub,
   renderLanding,
   renderLoopScript,
+  renderSkill,
+  renderSkillInstall,
 } from "../page/render.js";
 
 const store = new ChannelStore();
@@ -197,6 +199,24 @@ app.get("/loop.sh", (c) =>
 app.get("/helpers.sh", (c) =>
   c.body(renderHelpersScript(), 200, {
     "content-type": "text/plain; charset=utf-8",
+    "cache-control": "no-store",
+  }),
+);
+
+// Optional /agentalk skill. `skill.sh` is the `curl … | sh` installer; it
+// fetches `skill.md` (the SKILL.md body) and writes it under
+// ~/.claude/skills/agentalk/. Both are public and UA-agnostic — a human
+// inspecting skill.md gets the same bytes the installer writes.
+app.get("/skill.sh", (c) =>
+  c.body(renderSkillInstall(bridgeBase(c)), 200, {
+    "content-type": "text/plain; charset=utf-8",
+    "cache-control": "no-store",
+  }),
+);
+
+app.get("/skill.md", (c) =>
+  c.body(renderSkill(), 200, {
+    "content-type": "text/markdown; charset=utf-8",
     "cache-control": "no-store",
   }),
 );

@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "npm --prefix site run build && RL_CHANNELS_PER_HOUR=10000 RL_MESSAGES_PER_HOUR=100000 RL_CONCURRENT_CHANNELS_PER_IP=1000 tsx watch src/bridge/index.ts",
     "start": "tsx src/bridge/index.ts",
-    "build": "npm --prefix site run build && tsc && cp src/page/initiator.md src/page/joiner.md src/page/protocol.md src/page/loop.sh src/page/helpers.sh src/page/bootstrap-initiator.sh.tpl src/page/bootstrap-joiner.sh.tpl dist/page/ && rm -rf dist/site && cp -R site/dist dist/site",
+    "build": "npm --prefix site run build && tsc && cp src/page/initiator.md src/page/joiner.md src/page/protocol.md src/page/loop.sh src/page/helpers.sh src/page/bootstrap-initiator.sh.tpl src/page/bootstrap-joiner.sh.tpl src/page/skill.md src/page/skill-install.sh.tpl dist/page/ && rm -rf dist/site && cp -R site/dist dist/site",
     "site:dev": "npm --prefix site run dev",
     "site:build": "npm --prefix site run build",
     "typecheck": "tsc --noEmit"

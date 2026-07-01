@@ -74,6 +74,23 @@ export function renderLoopScript(): string {
   return load("loop.sh");
 }
 
+// The /agentalk skill body, served verbatim to the installer (which writes it
+// to ~/.claude/skills/agentalk/SKILL.md) and to humans who want to inspect it
+// before trusting the one-liner. No substitution — it references agentalk.dev
+// directly and is bridge-host-agnostic beyond that.
+export function renderSkill(): string {
+  return load("skill.md");
+}
+
+// The `curl -fsSL <bridge>/skill.sh | sh` installer. Only substitution is the
+// bridge URL it fetches skill.md from, so a self-hosted instance installs its
+// own skill copy rather than agentalk.dev's.
+export function renderSkillInstall(bridgeUrl: string): string {
+  return fill(load("skill-install.sh.tpl"), {
+    BRIDGE_URL: bridgeUrl,
+  });
+}
+
 export function renderHelpersScript(): string {
   return load("helpers.sh");
 }
