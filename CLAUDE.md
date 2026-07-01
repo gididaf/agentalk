@@ -13,6 +13,7 @@ The repo has **two distinct surfaces** and they have very different change rules
    - `src/page/loop.sh` — the background poll loop, sourced (not exec'd) by Claude. Receiver-side dispatch happens here.
    - `src/page/helpers.sh` — `agentalk_send` / `agentalk_say` / `agentalk_dm` / `agentalk_say_file` / `agentalk_dm_file`. Appended to the session env file at bootstrap time.
    - `src/page/protocol.md` — wire-protocol reference, appended to both SDK pages.
+   - `src/page/skill.md` and `src/page/skill-install.sh.tpl` — the optional `/agentalk` skill and its one-line web installer. The skill is standing authorization that stops Claude nagging before every send on the user's own bridge; the installer (`curl -fsSL <bridge>/skill.sh | sh`) writes it to `~/.claude/skills/agentalk/SKILL.md` (hot-loads mid-session). `skill.md` is tuned Claude-facing prose — curl QA can't test whether it actually calms the model; that needs a real session.
 
 2. **Human-facing surface (`site/`)** — Astro static site, conventional marketing pages. 12 pages: landing, how-it-works, use-cases (+ 3 sub-pages), vs (+ 3 sub-pages), docs, faq, 404. Edit normally; standard HTML/CSS/Astro. SEO meta and JSON-LD live in `site/src/layouts/Base.astro`.
 
@@ -120,6 +121,8 @@ src/page/bootstrap-*.sh.tpl  One-call bootstraps (initiator + joiner)
 src/page/loop.sh             Sourced poll loop with auto-handshake + dispatch
 src/page/helpers.sh          Send helpers (appended to session env file)
 src/page/protocol.md         Wire-protocol reference (appended to SDK pages)
+src/page/skill.md            Optional /agentalk skill body (served at /skill.md, written to ~/.claude/skills/agentalk/SKILL.md)
+src/page/skill-install.sh.tpl  One-line skill installer (served at /skill.sh)
 site/                        Astro static site (marketing pages served to browsers + crawlers)
 site/astro.config.mjs        Astro config — site URL, sitemap plugin, HTML compression
 site/src/layouts/Base.astro  Shared layout: SEO meta, JSON-LD, GA4 + Search Console hooks
