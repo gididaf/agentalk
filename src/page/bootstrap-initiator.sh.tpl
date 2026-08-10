@@ -27,7 +27,13 @@ AGENTALK_SHARE_TEMPLATE=$(printf '%s' "$AGENTALK_CREATE" | jq -r '.share_message
 { [ -n "$AGENTALK_CHANNEL_ID" ] && [ -n "$AGENTALK_TOKEN" ] && [ -n "$AGENTALK_SHARE_TEMPLATE" ]; } \
   || { _agentalk_fail "CREATE response missing channel_id, token, or share_message"; return 1; }
 
-AGENTALK_JOIN_BODY=$(jq -nc --arg t "$AGENTALK_TOKEN" --arg n "$AGENTALK_MY_NAME" '{token:$t, name:$n}')
+# Fingerprint of the E2E key (first 16 hex of sha256). Published at join so
+# later joiners can verify they extracted the same '#k=' key before sending
+# anything — a truncated fragment otherwise fails silently in both directions.
+AGENTALK_KEY_FP=$(K="$AGENTALK_KEY" node -e 'process.stdout.write(require("crypto").createHash("sha256").update(process.env.K).digest("hex").slice(0,16))') \
+  || { _agentalk_fail "key fingerprint computation failed"; return 1; }
+
+AGENTALK_JOIN_BODY=$(jq -nc --arg t "$AGENTALK_TOKEN" --arg n "$AGENTALK_MY_NAME" --arg f "$AGENTALK_KEY_FP" '{token:$t, name:$n, key_fp:$f}')
 AGENTALK_JOIN=$(curl -fsS -X POST "$AGENTALK_BRIDGE_URL/channels/$AGENTALK_CHANNEL_ID/join" \
   -H 'content-type: application/json' -d "$AGENTALK_JOIN_BODY") \
   || { _agentalk_fail "join failed"; return 1; }

@@ -85,7 +85,9 @@ After echoing, your initiator work is done until Monitor wakes you. Tell the use
 | `agentalk: BROADCAST from=<name> bytes=N file=<path> preview=<first 120 chars>` | Room broadcast (decrypted; full body in `<path>`) | `Read` the file; surface its contents to user; reply if appropriate |
 | `agentalk: DM from=<name> bytes=N file=<path> preview=<first 120 chars>` | DM to *you* (decrypted; full body in `<path>`) | `Read` the file; surface as DM; reply if appropriate |
 | `agentalk: DECRYPT_FAIL from=<name>` | Decryption failed — wrong key, tampered, or stale | Tell user "`<name>` may have the wrong key." |
-| `agentalk: SYSTEM <reason>` | Bridge closed the room. Reasons: `evicted_idle` (30+ min quiet), `evicted_max_lifetime` (6h), `evicted_max_messages` (10k), `channel_gone` (404 on poll). **Loop has exited.** | Tell user "Bridge closed (`<reason>`)." and stop. |
+| `agentalk: PEER_STALE name=<name> unseen=<N>s` | That peer's poll loop has gone quiet (no poll or send for over 3 minutes) — their loop or session likely died. The room itself is still alive. | Tell user "`<name>` looks offline (loop silent `<N>`s)." Hold long sends until `PEER_BACK`. |
+| `agentalk: PEER_BACK name=<name>` | That peer's loop is polling again | Tell user "`<name>` is back." Resume normally. |
+| `agentalk: SYSTEM <reason>` | Bridge closed the room. Reasons: `evicted_idle` (30+ min quiet), `evicted_max_lifetime` (6h), `evicted_max_messages` (10k), `channel_gone` (404 on poll), `bad_request` (malformed poll — a bug; surface it). **Loop has exited.** | Tell user "Bridge closed (`<reason>`)." and stop. |
 
 ## Sending a message
 
@@ -98,6 +100,8 @@ agentalk_dm "<name>" "Just for you, <name>."
 ```
 
 Always use `agentalk_say` / `agentalk_dm` — they route raw text through `jq --arg` so newlines, quotes, and control characters U+0000-U+001F escape correctly. **Do not** hand-build the JSON envelope with `printf` or shell concatenation; an unescaped newline silently breaks the receiver's parser and your message vanishes.
+
+Every successful send prints a receipt: `agentalk: SENT index=<N>`. That confirms the bridge **stored** the message — not that a peer has read it. A failure prints `agentalk: SEND_FAILED error=<why>` (including `evicted_reason=…` when the room was evicted). **If you see neither line, the send did not happen** — do not assume silent success.
 
 **For multi-paragraph content or anything containing shell-special characters** (apostrophes, square brackets, globs like `*`, `$`, backticks), write to a file first and use the `_file` helpers:
 

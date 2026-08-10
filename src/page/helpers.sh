@@ -31,10 +31,32 @@ agentalk_send() {
     const ct = Buffer.concat([ci.update(process.env.PT, "utf8"), ci.final()]);
     process.stdout.write(Buffer.concat([nonce, ct, ci.getAuthTag()]).toString("base64"));
   ')
-  curl -fsS -X POST "$BRIDGE_URL/channels/$CHANNEL_ID/send" \
+  # No -f: a 404's JSON body carries evicted_reason, and under HTTP/2 curl -f
+  # reports 4xx as exit 56 anyway (not 22), so exit codes are useless here.
+  # Success prints an explicit receipt — a silent success is indistinguishable
+  # from a no-op ("Bash completed with no output"), which cost real debugging
+  # time on 2026-08-10. index means STORED on the bridge, not read by a peer.
+  local RESP IDX ERR
+  RESP=$(curl -sS -X POST "$BRIDGE_URL/channels/$CHANNEL_ID/send" \
     -H 'content-type: application/json' \
     -d "$(jq -nc --arg t "$TOKEN" --arg p "$PARTICIPANT_ID" --arg x "$ENC" \
-          '{token:$t, participant_id:$p, text:$x}')" >/dev/null
+          '{token:$t, participant_id:$p, text:$x}')" 2>/dev/null)
+  if [ -z "$RESP" ]; then
+    echo "agentalk: SEND_FAILED error=network_unreachable"
+    return 1
+  fi
+  IDX=$(printf '%s' "$RESP" | jq -r '.index // empty' 2>/dev/null)
+  if [ -n "$IDX" ]; then
+    # The loop's internal HELLO/WELCOME sends stay silent (AGENTALK_IN_LOOP)
+    # so Monitor only wakes Claude for events worth acting on.
+    [ -z "${AGENTALK_IN_LOOP:-}" ] && echo "agentalk: SENT index=$IDX"
+    return 0
+  fi
+  ERR=$(printf '%s' "$RESP" \
+    | jq -r '(.error // "unknown") + (if .evicted_reason then " evicted_reason=" + .evicted_reason else "" end)' \
+    2>/dev/null)
+  echo "agentalk: SEND_FAILED error=${ERR:-unparseable_response}"
+  return 1
 }
 
 # High-level send helpers. Always prefer these to building JSON envelopes

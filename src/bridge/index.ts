@@ -167,6 +167,7 @@ const HTML_PAGES = [
   "/vs/mcp",
   "/vs/autogen",
   "/vs/crewai",
+  "/vs/retalk",
   "/docs",
   "/faq",
   "/about",
@@ -319,6 +320,21 @@ ${shareUrl}
   });
 });
 
+// A 404 on a channel that was evicted (rather than never existing / wrong
+// token) carries the reason. Without this, the eviction notice is delivered
+// only as a channel message — readable only by a live poll loop, i.e. by the
+// exact component whose death usually caused the eviction. Self-concealing
+// failures cost hours of diagnosis in the 2026-08-10 incident.
+function channelGoneBody(id: string, error: string) {
+  const t = store.tombstoneOf(id);
+  if (!t) return { error };
+  return {
+    error,
+    evicted_reason: t.reason,
+    evicted_s_ago: Math.max(0, Math.round((Date.now() - t.at) / 1000)),
+  };
+}
+
 app.post("/channels/:id/join", async (c) => {
   const id = c.req.param("id");
   let body: unknown;
@@ -327,12 +343,18 @@ app.post("/channels/:id/join", async (c) => {
   } catch {
     return c.json({ error: "invalid_json" }, 400);
   }
-  const { token, name } = (body ?? {}) as { token?: string; name?: string };
+  const { token, name, key_fp } = (body ?? {}) as {
+    token?: string;
+    name?: string;
+    key_fp?: unknown;
+  };
   if (!token || !name) return c.json({ error: "missing_token_or_name" }, 400);
-  const result = store.join(id, token, name);
+  const result = store.join(id, token, name, key_fp);
   if ("error" in result) {
     log("join_failed", { channel_id: id, reason: result.error });
-    return c.json(result, result.error === "channel_or_token_invalid" ? 404 : 400);
+    return result.error === "channel_or_token_invalid"
+      ? c.json(channelGoneBody(id, result.error), 404)
+      : c.json(result, 400);
   }
   log("join", { channel_id: id, name });
   return c.json(result);
@@ -364,7 +386,9 @@ app.post("/channels/:id/send", async (c) => {
   const result = store.send(id, token, participant_id, text);
   if ("error" in result) {
     log("send_failed", { channel_id: id, reason: result.error });
-    return c.json(result, result.error === "channel_or_token_invalid" ? 404 : 400);
+    return result.error === "channel_or_token_invalid"
+      ? c.json(channelGoneBody(id, result.error), 404)
+      : c.json(result, 400);
   }
   log("send", { channel_id: id, participant_id, bytes: text.length });
   return c.json(result);
@@ -374,20 +398,30 @@ app.get("/channels/:id/poll", async (c) => {
   const id = c.req.param("id");
   const token = c.req.query("token");
   const participantId = c.req.query("participant_id");
-  const sinceRaw = c.req.query("since") ?? "0";
+  // `??` only defaults an ABSENT param — `&since=` arrives as the empty
+  // string and survived to parseInt("") -> NaN -> 400. Clients whose cursor
+  // file was reaped by /tmp cleanup send exactly that shape, and pre-fix
+  // loop.sh vintages spin unthrottled on the 400 (2026-08-10 incident, 2.1M
+  // req/day). `||` treats "" as missing, so they get a full replay instead.
+  const sinceRaw = c.req.query("since") || "0";
   const since = Number.parseInt(sinceRaw, 10);
   if (!token || !participantId || Number.isNaN(since) || since < 0) {
     return c.json({ error: "missing_or_invalid_query" }, 400);
   }
   const result = await store.poll(id, token, participantId, since);
   if ("error" in result) {
-    return c.json(result, result.error === "channel_or_token_invalid" ? 404 : 400);
+    return result.error === "channel_or_token_invalid"
+      ? c.json(channelGoneBody(id, result.error), 404)
+      : c.json(result, 400);
   }
   c.header("cache-control", "no-store");
-  if (result.messages.length === 0) {
-    return c.body(null, 204);
-  }
-  return c.json(result);
+  // Always 200 with a body — an empty long-poll used to return a bare 204,
+  // but the roster (per-participant last_seen_s) must reach clients even
+  // when the room is quiet: a silent room is precisely when "is my peer
+  // still there?" needs answering. Roster is computed AFTER the long-poll
+  // resolves so last_seen_s is fresh, not 50s stale. Old loops tolerate
+  // this: they read .cursor/.messages and ignore unknown fields.
+  return c.json({ ...result, roster: store.roster(id, token) });
 });
 
 app.post("/channels/:id/leave", async (c) => {
@@ -407,7 +441,9 @@ app.post("/channels/:id/leave", async (c) => {
   }
   const result = store.leave(id, token, participant_id);
   if ("error" in result) {
-    return c.json(result, result.error === "channel_or_token_invalid" ? 404 : 400);
+    return result.error === "channel_or_token_invalid"
+      ? c.json(channelGoneBody(id, result.error), 404)
+      : c.json(result, 400);
   }
   log("leave", { channel_id: id, participant_id });
   return c.json(result);

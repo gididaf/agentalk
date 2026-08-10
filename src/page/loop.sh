@@ -15,10 +15,28 @@
 # so the loop polls forever without blocking the conversation.
 
 CURSOR_FILE="/tmp/agentalk-$CHANNEL_ID-$MY_NAME.cursor"
+HDR_FILE="/tmp/agentalk-$CHANNEL_ID-$MY_NAME.hdr"
 DEBUG_LOG="/tmp/agentalk-debug-$MY_NAME.log"
 echo 0 > "$CURSOR_FILE"
 exec 2>>"$DEBUG_LOG"
 echo "=== loop start $(date '+%H:%M:%S') MY_NAME=$MY_NAME CHANNEL_ID=$CHANNEL_ID PARTICIPANT_ID=$PARTICIPANT_ID MY_CHALL=${MY_CHALL:-(unset)} ===" >&2
+
+# Leave a last line in the debug log when the parent shell takes the loop down
+# with it (session end, TaskStop). Without this, a killed loop and a loop that
+# never ran are indistinguishable post-mortem — real QA logs from 2026-08-03
+# ended mid-conversation with no exit reason for exactly this cause.
+trap 'echo "[$(date '+%H:%M:%S')] loop terminated by signal" >&2; exit 143' TERM HUP INT
+
+# Suppress the "agentalk: SENT" receipt for the loop's own HELLO/WELCOME
+# sends — Monitor should only wake Claude for events worth acting on.
+AGENTALK_IN_LOOP=1
+
+# Peer-liveness tracking. The bridge stamps each participant's last poll/send
+# and returns the roster on every poll response; a peer whose loop died stops
+# advancing even while the room stays warm. One event per transition, not per
+# poll — Monitor wakes are expensive.
+AGENTALK_STALE_S=${AGENTALK_STALE_S:-180}
+STALE_PEERS=" "
 
 # Joiner role: send our HELLO once now that the loop is running. The initiator
 # leaves MY_CHALL unset, so this is a no-op for them. Doing it here (not in
@@ -36,18 +54,83 @@ if [ -n "${MY_CHALL:-}" ]; then
 fi
 
 while true; do
-  CUR=$(cat "$CURSOR_FILE")
-  RESP=$(curl -fsS -m 55 \
+  # 2>/dev/null on the cat: /tmp cleanup can reap the cursor file under a
+  # long-lived loop. Without the ${CUR:-0} default that produced `&since=`,
+  # an HTTP 400, and (with the old exit-code check below) an unthrottled
+  # 1ms-per-iteration spin — the 2.1M-requests/day incident of 2026-08-10.
+  CUR=$(cat "$CURSOR_FILE" 2>/dev/null)
+  CUR=${CUR:-0}
+  # No -f, and the HTTP status is read from the -D header dump, NOT from
+  # curl's exit code. Under HTTP/2 (Cloudflare fronts production) curl -f
+  # reports 4xx as exit 56, not 22 — an `rc -eq 22` check never fires there,
+  # so every terminal HTTP error fell through and looped forever.
+  RESP=$(curl -sS -m 55 -D "$HDR_FILE" \
     "$BRIDGE_URL/channels/$CHANNEL_ID/poll?token=$TOKEN&participant_id=$PARTICIPANT_ID&since=$CUR" \
     2>/dev/null)
   RC=$?
-  if [ $RC -eq 22 ]; then
-    echo "  -> curl HTTP error (exit 22) — channel likely gone" >&2
-    echo "agentalk: SYSTEM channel_gone"
-    exit 0
-  fi
+  STATUS=$(head -n 1 "$HDR_FILE" 2>/dev/null | cut -d' ' -f2)
+  case "$STATUS" in
+    200) ;;  # messages in RESP — fall through to dispatch below
+    204) continue ;;  # long-poll expired with nothing new — re-poll now
+    404)
+      # The bridge remembers evicted channels for 24h and puts the reason in
+      # the 404 body — so even a loop that was dead through the eviction
+      # itself can report WHY the room is gone, not just that it is.
+      GONE_REASON=$(printf '%s' "$RESP" | jq -r '.evicted_reason // empty' 2>/dev/null)
+      echo "  -> poll HTTP 404 — reason=${GONE_REASON:-unknown}" >&2
+      echo "agentalk: SYSTEM ${GONE_REASON:-channel_gone}"
+      exit 0
+      ;;
+    400)
+      echo "  -> poll HTTP 400 — malformed request, will not self-heal" >&2
+      echo "agentalk: SYSTEM bad_request"
+      exit 1
+      ;;
+    *)
+      # 5xx, rate-limit, or transport failure (STATUS empty: DNS, refused,
+      # mid-flight drop). The sleep is load-bearing — a fail-fast curl with a
+      # bare `continue` retries at network speed, not long-poll speed.
+      echo "  -> poll failed status=${STATUS:-none} curl_rc=$RC — backing off 2s" >&2
+      sleep 2
+      continue
+      ;;
+  esac
   [ -z "$RESP" ] && continue
   printf '%s' "$RESP" | jq -r '.cursor' > "$CURSOR_FILE"
+
+  # Peer-liveness transitions. Runs on every poll response (a quiet room
+  # still answers ~50s with an empty 200 + roster), so detection lags the
+  # threshold by at most one poll cycle. Names are whitespace-free by
+  # construction (bootstrap sanitizes to [a-zA-Z0-9._-]).
+  ROSTER_PEERS=$(printf '%s' "$RESP" | jq -r --arg me "$MY_NAME" \
+    '.roster // [] | .[] | select(.name != $me) | .name' 2>/dev/null | tr '\n' ' ')
+  NOW_STALE=$(printf '%s' "$RESP" | jq -r --arg me "$MY_NAME" --argjson th "$AGENTALK_STALE_S" \
+    '.roster // [] | .[] | select(.name != $me and .last_seen_s > $th) | .name' 2>/dev/null | tr '\n' ' ')
+  for N in $NOW_STALE; do
+    case "$STALE_PEERS" in *" $N "*) ;; *)
+      SECS=$(printf '%s' "$RESP" | jq -r --arg n "$N" '.roster[] | select(.name == $n) | .last_seen_s' 2>/dev/null)
+      echo "  -> peer $N stale (last_seen=${SECS}s)" >&2
+      echo "agentalk: PEER_STALE name=$N unseen=${SECS}s"
+      STALE_PEERS="$STALE_PEERS$N "
+      ;;
+    esac
+  done
+  for N in $STALE_PEERS; do
+    [ -z "$N" ] && continue
+    case " $ROSTER_PEERS" in *" $N "*) ;; *)
+      # Peer left the channel entirely — forget silently, the leave event
+      # already tells the story.
+      STALE_PEERS=$(printf '%s' "$STALE_PEERS" | sed "s/ $N / /")
+      continue
+      ;;
+    esac
+    case " $NOW_STALE" in *" $N "*) ;; *)
+      echo "  -> peer $N back (polling again)" >&2
+      echo "agentalk: PEER_BACK name=$N"
+      STALE_PEERS=$(printf '%s' "$STALE_PEERS" | sed "s/ $N / /")
+      ;;
+    esac
+  done
   while read -r LINE; do
     TYPE=$(printf '%s' "$LINE" | jq -r '.type')
     FROM=$(printf '%s' "$LINE" | jq -r '.from')

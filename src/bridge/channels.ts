@@ -20,6 +20,21 @@ export interface Participant {
   id: string;
   name: string;
   joinedAt: number;
+  // Truncated sha256 of the E2E key, self-reported at join. The bridge never
+  // sees the key itself; matching fingerprints only prove two participants
+  // hold the SAME key, which is exactly the check a joiner needs before
+  // writing 17KB into a room nobody can decrypt.
+  keyFp?: string;
+  // Stamped on every authorized poll and send. A participant whose loop died
+  // stops advancing this even while the channel itself stays warm — it is the
+  // per-peer liveness signal the roster exposes as last_seen_s.
+  lastSeenAt: number;
+}
+
+export interface RosterEntry {
+  name: string;
+  key_fp: string | null;
+  last_seen_s: number;
 }
 
 export interface Channel {
@@ -42,6 +57,11 @@ interface Waiter {
 // Cloudflare proxy enforces a 100s origin response ceiling; never raise this above ~90s.
 const POLL_TIMEOUT_MS = 50_000;
 const TOMBSTONE_GRACE_MS = 5_000;
+// How long an evicted channel's reason stays queryable after deletion, so a
+// client that comes back later gets `evicted_reason` in the 404 body instead
+// of a bare channel_or_token_invalid. Bounded so the map can't grow forever.
+const TOMBSTONE_MEMORY_MS = 24 * 60 * 60_000;
+const TOMBSTONE_MEMORY_MAX = 10_000;
 
 function newId(bytes = 12): string {
   return randomBytes(bytes).toString("hex");
@@ -70,6 +90,7 @@ export type EvictionListener = (channelId: string, creatorIp: string, reason: Ev
 export class ChannelStore {
   private channels = new Map<string, Channel>();
   private waiters = new Map<string, Set<Waiter>>();
+  private tombstones = new Map<string, { reason: EvictionReason; at: number }>();
   private sweepTimer: NodeJS.Timeout | null = null;
   private evictionCounts: Record<EvictionReason, number> = {
     evicted_idle: 0,
@@ -105,6 +126,26 @@ export class ChannelStore {
     return { channel_id: id, token };
   }
 
+  // Roster is ordered by join time (Map preserves insertion order), so the
+  // first entry is always the channel creator — the participant who minted
+  // the E2E key. Joiners compare their own fingerprint against that one.
+  private rosterOf(ch: Channel, now: number = Date.now()): RosterEntry[] {
+    return [...ch.participants.values()].map((p) => ({
+      name: p.name,
+      key_fp: p.keyFp ?? null,
+      last_seen_s: Math.max(0, Math.round((now - p.lastSeenAt) / 1000)),
+    }));
+  }
+
+  roster(channelId: string, token: string): RosterEntry[] {
+    const ch = this.getAuthorized(channelId, token);
+    return ch ? this.rosterOf(ch) : [];
+  }
+
+  tombstoneOf(channelId: string): { reason: EvictionReason; at: number } | undefined {
+    return this.tombstones.get(channelId);
+  }
+
   private getAuthorized(channelId: string, token: string): Channel | null {
     const ch = this.channels.get(channelId);
     if (!ch) return null;
@@ -116,7 +157,10 @@ export class ChannelStore {
     channelId: string,
     token: string,
     name: string,
-  ): { participant_id: string; participants: string[] } | { error: string } {
+    keyFp?: unknown,
+  ):
+    | { participant_id: string; participants: string[]; roster: RosterEntry[] }
+    | { error: string } {
     const ch = this.getAuthorized(channelId, token);
     if (!ch) return { error: "channel_or_token_invalid" };
     if (!name || typeof name !== "string" || name.length === 0 || name.length > 64) {
@@ -128,14 +172,26 @@ export class ChannelStore {
     for (const p of ch.participants.values()) {
       if (p.name === name) return { error: "name_taken" };
     }
+    // Optional, self-reported. 8-64 hex chars or it is silently dropped —
+    // never a join failure, so old bootstraps that don't send it keep working.
+    const fp = typeof keyFp === "string" && /^[0-9a-f]{8,64}$/i.test(keyFp)
+      ? keyFp.toLowerCase()
+      : undefined;
     const participantId = newId(8);
     const now = Date.now();
-    ch.participants.set(participantId, { id: participantId, name, joinedAt: now });
+    ch.participants.set(participantId, {
+      id: participantId,
+      name,
+      joinedAt: now,
+      keyFp: fp,
+      lastSeenAt: now,
+    });
     ch.lastActivity = now;
     this.append(ch, { type: "join", from: name });
     return {
       participant_id: participantId,
       participants: [...ch.participants.values()].map((p) => p.name),
+      roster: this.rosterOf(ch, now),
     };
   }
 
@@ -149,6 +205,7 @@ export class ChannelStore {
     if (!ch) return { error: "channel_or_token_invalid" };
     const p = ch.participants.get(participantId);
     if (!p) return { error: "participant_not_in_channel" };
+    p.lastSeenAt = Date.now();
     if (typeof text !== "string" || text.length === 0) return { error: "empty_text" };
     if (text.length > 64 * 1024) return { error: "text_too_large" };
     const msg = this.append(ch, { type: "message", from: p.name, text });
@@ -181,10 +238,12 @@ export class ChannelStore {
   ): Promise<{ messages: ChannelMessage[]; cursor: number } | { error: string }> {
     const ch = this.getAuthorized(channelId, token);
     if (!ch) return Promise.resolve({ error: "channel_or_token_invalid" });
-    if (!ch.participants.has(participantId)) {
+    const pollingP = ch.participants.get(participantId);
+    if (!pollingP) {
       return Promise.resolve({ error: "participant_not_in_channel" });
     }
     ch.lastActivity = Date.now();
+    pollingP.lastSeenAt = ch.lastActivity;
     const current = ch.messages.length;
     if (since < current) {
       const messages = ch.messages.slice(since);
@@ -251,6 +310,19 @@ export class ChannelStore {
   }
 
   sweep(now: number = Date.now()): EvictionReason[] {
+    // Prune expired tombstones; if the cap is still exceeded (mass-eviction
+    // burst), drop oldest-first — Map iteration order is insertion order.
+    for (const [id, t] of this.tombstones) {
+      if (now - t.at >= TOMBSTONE_MEMORY_MS) this.tombstones.delete(id);
+    }
+    if (this.tombstones.size > TOMBSTONE_MEMORY_MAX) {
+      const excess = this.tombstones.size - TOMBSTONE_MEMORY_MAX;
+      let dropped = 0;
+      for (const id of this.tombstones.keys()) {
+        if (dropped++ >= excess) break;
+        this.tombstones.delete(id);
+      }
+    }
     const evicted: EvictionReason[] = [];
     for (const ch of [...this.channels.values()]) {
       if (ch.evicted) continue;
@@ -271,6 +343,7 @@ export class ChannelStore {
     if (ch.evicted) return;
     if (!this.channels.has(ch.id)) return;
     ch.evicted = true;
+    this.tombstones.set(ch.id, { reason, at: Date.now() });
     this.append(ch, { type: "system", reason });
     this.evictionCounts[reason] += 1;
     for (const listener of this.listeners) listener(ch.id, ch.creatorIp, reason);
