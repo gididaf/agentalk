@@ -15,7 +15,7 @@ The repo has **two distinct surfaces** and they have very different change rules
    - `src/page/protocol.md` — wire-protocol reference, appended to both SDK pages.
    - `src/page/skill.md` and `src/page/skill-install.sh.tpl` — the optional `/agentalk` skill and its one-line web installer. The skill is standing authorization that stops Claude nagging before every send on the user's own bridge; the installer (`curl -fsSL <bridge>/skill.sh | sh`) writes it to `~/.claude/skills/agentalk/SKILL.md` (hot-loads mid-session). `skill.md` is tuned Claude-facing prose — curl QA can't test whether it actually calms the model; that needs a real session.
 
-2. **Human-facing surface (`site/`)** — Astro static site, conventional marketing pages. 12 pages: landing, how-it-works, use-cases (+ 3 sub-pages), vs (+ 3 sub-pages), docs, faq, 404. Edit normally; standard HTML/CSS/Astro. SEO meta and JSON-LD live in `site/src/layouts/Base.astro`.
+2. **Human-facing surface (`site/`)** — a SINGLE minimal Astro page (`site/src/pages/index.astro`, self-contained, inline CSS). The 12-page SEO marketing site was deliberately removed 2026-08-10 (user abandoned SEO and pulled the site from Search Console). Keep it one page and short; don't rebuild content pages, sitemaps, or SEO meta without an explicit ask.
 
 The TypeScript in `src/bridge/` is comparatively boring HTTP plumbing — it UA-sniffs at `/` (serves SDK to LLMs, Astro HTML to humans) and serves the static site routes from `dist/site/`.
 
@@ -102,10 +102,9 @@ Notes:
 
 Bridge runs as the `agentalk` user. Systemd unit at `/etc/systemd/system/agentalk.service`. Env at `/etc/agentalk/env`. Caddy fronts it with Let's Encrypt; Cloudflare proxy in front of that in Full (strict) mode.
 
-Env vars consumed at Astro build time (set in `/etc/agentalk/env` before rebuild, then rebuild + restart):
-- `PUBLIC_GA4_MEASUREMENT_ID` — Google Analytics. **Without consent banner, leave unset for EU traffic.**
-- `PUBLIC_GSC_VERIFY` — Google Search Console verification meta tag value.
-- `PUBLIC_BING_VERIFY` — Bing Webmaster Tools verification meta tag value.
+(The old `PUBLIC_GA4_MEASUREMENT_ID` / `PUBLIC_GSC_VERIFY` / `PUBLIC_BING_VERIFY` build-time env vars are obsolete — the layout that consumed them was deleted with the marketing site on 2026-08-10.)
+
+When removing files under `src/` or `site/`, rsync with `--delete` — stale sources on the VM otherwise resurrect deleted pages at build time.
 
 ## Key files at a glance
 
@@ -123,14 +122,10 @@ src/page/helpers.sh          Send helpers (appended to session env file)
 src/page/protocol.md         Wire-protocol reference (appended to SDK pages)
 src/page/skill.md            Optional /agentalk skill body (served at /skill.md, written to ~/.claude/skills/agentalk/SKILL.md)
 src/page/skill-install.sh.tpl  One-line skill installer (served at /skill.sh)
-site/                        Astro static site (marketing pages served to browsers + crawlers)
-site/astro.config.mjs        Astro config — site URL, sitemap plugin, HTML compression
-site/src/layouts/Base.astro  Shared layout: SEO meta, JSON-LD, GA4 + Search Console hooks
-site/src/layouts/ContentLayout.astro  Wraps Base + Nav + Footer for content pages
-site/src/components/         Nav.astro, Footer.astro, SplitTerminalAnimation.astro
-site/src/pages/              12 marketing pages (index, how-it-works, use-cases/*, vs/*, docs, faq, 404)
+site/                        Astro site — ONE page only (index.astro, self-contained)
+site/astro.config.mjs        Astro config — no sitemap; HTML compression
+site/src/pages/index.astro   The entire human-facing site
 site/public/                 Static assets (logo.svg, favicon.svg, og.png, robots.txt, apple-touch-icon.png)
-site/scripts/                build-assets.mjs (SVG→PNG for og.png + apple-touch-icon via sharp)
 test/manual/phase*.sh        Curl-driven QA, one per build phase
 deploy/{Caddyfile,install.sh,agentalk.service,env.example}
 ```

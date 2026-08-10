@@ -126,8 +126,6 @@ app.get("/c/:id", joinerHandler);
 // search engines, so cache aggressively at the CDN.
 const STATIC_ASSETS: Record<string, { contentType: string; cacheControl: string }> = {
   "/robots.txt": { contentType: "text/plain; charset=utf-8", cacheControl: "public, max-age=3600" },
-  "/sitemap-index.xml": { contentType: "application/xml; charset=utf-8", cacheControl: "public, max-age=3600" },
-  "/sitemap-0.xml": { contentType: "application/xml; charset=utf-8", cacheControl: "public, max-age=3600" },
   "/favicon.svg": { contentType: "image/svg+xml", cacheControl: "public, max-age=86400" },
   "/favicon-32.png": { contentType: "image/png", cacheControl: "public, max-age=86400" },
   "/apple-touch-icon.png": { contentType: "image/png", cacheControl: "public, max-age=86400" },
@@ -152,43 +150,9 @@ for (const [path, meta] of Object.entries(STATIC_ASSETS)) {
   });
 }
 
-// Astro-built content pages. Each path serves the corresponding
-// <path>/index.html from site/dist/. Unlike /, these do not UA-sniff:
-// LLM agents that land here just get the HTML, which is fine — the
-// canonical SDK is at /llms.txt. No Vary: User-Agent because the body
-// is the same for every UA.
-const HTML_PAGES = [
-  "/how-it-works",
-  "/use-cases",
-  "/use-cases/parallel-coding",
-  "/use-cases/distributed-code-review",
-  "/use-cases/agent-swarms",
-  "/vs",
-  "/vs/mcp",
-  "/vs/autogen",
-  "/vs/crewai",
-  "/vs/retalk",
-  "/docs",
-  "/faq",
-  "/about",
-];
-
-for (const path of HTML_PAGES) {
-  app.get(path, (c) => {
-    try {
-      const buf = loadSiteAsset(`${path.slice(1)}/index.html`);
-      return c.body(buf.toString("utf8"), 200, {
-        "content-type": "text/html; charset=utf-8",
-        "cache-control": "public, max-age=300",
-      });
-    } catch {
-      return c.notFound();
-    }
-  });
-  // Trailing-slash form 301s to the canonical no-slash form. Inbound links
-  // (including older sitemaps) may carry a slash; without this they 404.
-  app.get(`${path}/`, (c) => c.redirect(path, 301));
-}
+// The human-facing site is a single page served at / (see the UA-sniffed
+// handler above). Former content pages (/docs, /vs/*, /use-cases/*, …) were
+// removed 2026-08-10 — they now 404 into the notFound() hint below.
 
 app.get("/loop.sh", (c) =>
   c.body(renderLoopScript(), 200, {
