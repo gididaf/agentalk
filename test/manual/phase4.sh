@@ -8,6 +8,15 @@
 set -u
 
 BRIDGE="${BRIDGE:-http://localhost:3000}"
+
+# The bridge UA-sniffs at `/`: a browser gets the Astro HTML landing page, an
+# LLM user agent gets the markdown SDK (see LLM_UA in src/bridge/index.ts).
+# curl's default UA is NOT an LLM UA, so any fetch of `/` here must send one —
+# otherwise every SDK assertion below silently runs against the human page and
+# fails for a reason that has nothing to do with the SDK. The opposite holds at
+# /c/:id, where `Claude-User` gets the short WebFetch stub and plain curl gets
+# the full joiner SDK — those fetches stay bare on purpose.
+LLM_UA='User-Agent: Claude-User'
 PASS=0
 FAIL=0
 
@@ -31,15 +40,13 @@ ok "bridge up"
 
 # 1. pages advertise the background recipe
 step "1. initiator page advertises background-receive + Monitor + fallback"
-init=$(curl -fsS "$BRIDGE/")
+init=$(curl -fsS -H "$LLM_UA" "$BRIDGE/")
 echo "$init" | grep -q 'run_in_background'    && ok "initiator page mentions run_in_background" \
                                               || bad "initiator page missing run_in_background"
 echo "$init" | grep -q 'Monitor'              && ok "initiator page mentions Monitor"            \
                                               || bad "initiator page missing Monitor"
-echo "$init" | grep -q 'agentalk-\$CHANNEL_ID' && ok "initiator page uses per-channel cursor file" \
-                                              || bad "initiator page missing cursor file pattern"
-echo "$init" | grep -q 'Fallback'              && ok "initiator page has Fallback section"        \
-                                              || bad "initiator page missing Fallback section"
+echo "$init" | grep -q 'Without Monitor armed' && ok "initiator page hard-requires Monitor" \
+                                              || bad "initiator page lost the 'Without Monitor armed' warning"
 
 step "2. joiner page advertises background-receive + Monitor + fallback"
 # need a channel id to fetch /c/:id
@@ -51,10 +58,45 @@ echo "$join" | grep -q 'run_in_background'    && ok "joiner page mentions run_in
                                               || bad "joiner page missing run_in_background"
 echo "$join" | grep -q 'Monitor'              && ok "joiner page mentions Monitor"            \
                                               || bad "joiner page missing Monitor"
-echo "$join" | grep -q 'agentalk-\$CHANNEL_ID' && ok "joiner page uses per-channel cursor file" \
-                                              || bad "joiner page missing cursor file pattern"
-echo "$join" | grep -q 'Fallback'              && ok "joiner page has Fallback section"        \
-                                              || bad "joiner page missing Fallback section"
+echo "$join" | grep -q 'Without Monitor armed' && ok "joiner page hard-requires Monitor" \
+                                              || bad "joiner page lost the 'Without Monitor armed' warning"
+
+# 2c. The Monitor call itself. Real-Claude QA on 2026-08-12 found the pages
+# still specifying `bash_id` + `pattern`, a Monitor signature that no longer
+# exists — live sessions were quietly improvising a tail|grep of the background
+# task's output file. Arming Monitor is the most-missed step in the whole SDK,
+# so the instruction has to be copy-pasteable, not reconstructed.
+step "2c. both pages specify a runnable Monitor command"
+check_monitor_doc() {   # check_monitor_doc <body> <who>
+  printf '%s' "$1" | grep -qF 'tail -f -n +1' \
+    && ok "$2 page gives Monitor a tail command" || bad "$2 page has no runnable Monitor command"
+  printf '%s' "$1" | grep -qF 'agentalk-events-' \
+    && ok "$2 page points Monitor at the events file" || bad "$2 page does not name the events file"
+  printf '%s' "$1" | grep -qF 'persistent:' \
+    && ok "$2 page specifies persistent" || bad "$2 page omits persistent (Monitor would time out)"
+}
+check_monitor_doc "$init" initiator
+check_monitor_doc "$join" joiner
+
+step "2d. the joiner bootstrap carries the same instruction in NEXT 2"
+CR=$(curl -fsS -X POST "$BRIDGE/channels")
+BID=$(echo "$CR" | jq -r '.channel_id'); BTOK=$(echo "$CR" | jq -r '.token')
+BOOT=$(curl -fsS "$BRIDGE/c/$BID/bootstrap.sh?token=$BTOK")
+printf '%s' "$BOOT" | grep -qF 'tail -f -n +1' \
+  && ok "bootstrap prints a tail command in NEXT 2" || bad "bootstrap NEXT 2 has no Monitor command"
+printf '%s' "$BOOT" | grep -qF 'timeout_ms' \
+  && ok "bootstrap names every required Monitor input" || bad "bootstrap omits a required Monitor input"
+# Whether the path is actually substituted can only be seen by RUNNING the
+# bootstrap — phase9 does that and checks the printed path resolves to a file.
+
+# 2b. Cursor tracking is loop.sh's job now — it used to be documented on
+# the SDK pages as something Claude wrote itself. Assert it where it lives.
+step "2b. /loop.sh owns per-channel cursor tracking"
+loopsh=$(curl -fsS "$BRIDGE/loop.sh")
+printf '%s' "$loopsh" | grep -qF 'CURSOR_FILE="/tmp/agentalk-$CHANNEL_ID-$MY_NAME.cursor"' \
+  && ok "loop.sh keys the cursor file on channel + name" || bad "loop.sh cursor file is not per-channel"
+printf '%s' "$loopsh" | grep -qF 'echo 0 > "$CURSOR_FILE"' \
+  && ok "loop.sh initialises the cursor" || bad "loop.sh no longer initialises the cursor"
 
 # 3. alice + bob join the channel we created
 step "3. alice + bob join"

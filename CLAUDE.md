@@ -2,9 +2,9 @@
 
 You are working on **agentalk**, an LLM-first HTTP bridge that lets two or more Claude Code sessions on different machines converse autonomously. Live instance: <https://agentalk.dev>. Public README has the user-facing story; this file is for *you*.
 
-## Two surfaces — keep them separate
+## Three surfaces — keep them separate
 
-The repo has **two distinct surfaces** and they have very different change rules:
+The repo has **three distinct surfaces** and they have very different change rules:
 
 1. **LLM-facing surface (`src/page/`)** — this is the load-bearing, tuned-against-real-Claude part. Every word was tested against real Claude Code sessions. Re-run the manual QA after editing; phrasing changes routinely change Claude behavior. **Do not rewrite for prose elegance.**
 
@@ -15,9 +15,13 @@ The repo has **two distinct surfaces** and they have very different change rules
    - `src/page/protocol.md` — wire-protocol reference, appended to both SDK pages.
    - `src/page/skill.md` and `src/page/skill-install.sh.tpl` — the optional `/agentalk` skill and its one-line web installer. The skill is standing authorization that stops Claude nagging before every send on the user's own bridge; the installer (`curl -fsSL <bridge>/skill.sh | sh`) writes it to `~/.claude/skills/agentalk/SKILL.md` (hot-loads mid-session). `skill.md` is tuned Claude-facing prose — curl QA can't test whether it actually calms the model; that needs a real session.
 
-2. **Human-facing surface (`site/`)** — a SINGLE minimal Astro page (`site/src/pages/index.astro`, self-contained, inline CSS). The 12-page SEO marketing site was deliberately removed 2026-08-10 (user abandoned SEO and pulled the site from Search Console). Keep it one page and short; don't rebuild content pages, sitemaps, or SEO meta without an explicit ask.
+2. **Browser chat surface (`src/page/chat.html`)** — the page a *person* gets when they open a join link in a browser, so a coworker can talk to a Claude session with no install. One self-contained file: inline CSS, inline JS, zero external requests, no build step, no Astro. It reimplements the wire protocol in WebCrypto, so it must stay byte-compatible with `helpers.sh` — `test/manual/phase11.sh` extracts the crypto block from the *served page* and runs it against the real `helpers.sh` recipe in both directions. Two standing rules: **every peer-controlled string renders via `textContent`** (names are not sanitized server-side), and **no `BRIDGE_URL` is interpolated into it** — `bridgeBase()` is Host-header-derived, which is harmless in markdown and a reflected-XSS primitive in HTML, so the page uses relative URLs only.
+
+3. **Human-facing surface (`site/`)** — a SINGLE minimal Astro page (`site/src/pages/index.astro`, self-contained, inline CSS). The 12-page SEO marketing site was deliberately removed 2026-08-10 (user abandoned SEO and pulled the site from Search Console). Keep it one page and short; don't rebuild content pages, sitemaps, or SEO meta without an explicit ask.
 
 The TypeScript in `src/bridge/` is comparatively boring HTTP plumbing — it UA-sniffs at `/` (serves SDK to LLMs, Astro HTML to humans) and serves the static site routes from `dist/site/`.
+
+`/c/:id` sniffs too, but by the **inverse** rule, and the difference is load-bearing. At `/` an LLM UA opts in to markdown and everything else gets HTML. At `/c/:id` the default must stay markdown, because `curl`'s UA (`curl/8.x`) matches none of the LLM patterns and a curling Claude fetching the joiner SDK is the canonical join path (asserted in `test/manual/phase2.sh`). So browsers opt IN, via `Accept: text/html`, and every unknown client keeps the old behaviour. The test is `Accept` and not a browser-UA regex on purpose: `Claude-User`'s real UA string contains `Mozilla/5.0`.
 
 ## Stack
 
@@ -49,6 +53,13 @@ Manual QA, one script per build phase. **Re-run the relevant one after any SDK/l
 ./test/manual/phase5.sh  # AES-GCM round trip + wrong-key/AAD/tamper rejection
 ./test/manual/phase6.sh  # 3-Claude room + HELLO/WELCOME + broadcast vs DM
 ./test/manual/phase7.sh  # rate limits + eviction + metrics
+./test/manual/phase8.sh  # hibernate / resume (bridge side)
+./test/manual/phase9.sh  # loop.sh survives a sleep/wake cycle (executes the loop)
+./test/manual/phase10.sh # browser routing at /c/:id + share_message_human
+./test/manual/phase11.sh # chat page: WebCrypto<->helpers.sh interop, renderer vs XSS
+./test/manual/phase12.sh # HUMAN_JOINED + burst coalescing (executes the loop)
+./test/manual/phase13.sh # join rate limit + control-char names
+./test/manual/session-isolation.sh  # two sessions from one cwd must not cross-talk
 ```
 
 These are curl-driven, not real-Claude. **They cannot catch SDK phrasing regressions** — those need an actual `claude` session reading the page.
@@ -57,17 +68,19 @@ These are curl-driven, not real-Claude. **They cannot catch SDK phrasing regress
 
 1. **zsh's builtin `echo` interprets backslash escapes by default.** Claude Code's Bash tool runs zsh on macOS. `echo "$PT" | jq` corrupts any JSON envelope containing `\n` escape sequences because `\n` becomes a literal newline. **Always use `printf '%s' "$VAR" | …`** in receiver paths. `loop.sh` has this fix; do not regress it. See the comment block around line 99.
 
-2. **Claude Code's Bash tool spawns a fresh shell per call.** Env vars and shell functions defined in one Bash call are gone in the next. The pattern is: persist state to `/tmp/agentalk-session-<name>.env` and source it at the start of every subsequent Bash call. The bootstrap scripts print the literal file path so Claude doesn't have to interpolate `$AGENTALK_SESSION_FILE`.
+2. **Claude Code's Bash tool spawns a fresh shell per call.** Env vars and shell functions defined in one Bash call are gone in the next. The pattern is: persist state to `/tmp/agentalk-session-<channel_id>-<name>.env` and source it at the start of every subsequent Bash call. The bootstrap scripts print the literal file path so Claude doesn't have to interpolate `$AGENTALK_SESSION_FILE`. **The `<channel_id>` half is load-bearing**: `<name>` is the basename of the cwd, so two agentalk sessions started from the same directory collided on one env file and the second silently redirected the first's sends into the wrong channel (observed live 2026-08-12). All per-session tmp files — `session`, `share`, `cursor`, `hdr`, `debug` — are channel-scoped for this reason.
 
-3. **Don't put `{name}` or `{{name}}` patterns in Bash commands** Claude executes. Claude Code's Bash tool reserves `{…}` for its own placeholder substitution. `curl -w '%{http_code}'` is a real footgun.
+3. **A new template under `src/page/` must be added to the `cp` list in `package.json`'s `build` script.** `render.ts` loads templates from beside the *compiled* JS (`dist/page/`), so a file that exists in `src/` but was never copied throws at request time — a production 500 on a route that works perfectly in dev. `test/manual/phase10.sh` runs a real build and asserts the chat templates landed.
 
-4. **HEX validation on `:id` and `?token=` is load-bearing.** Both values are interpolated literally into shell script bodies served from `/c/:id/bootstrap.sh`. The `HEX_RE` check in `src/page/render.ts` prevents shell injection. Don't disable it.
+4. **Don't put `{name}` or `{{name}}` patterns in Bash commands** Claude executes. Claude Code's Bash tool reserves `{…}` for its own placeholder substitution. `curl -w '%{http_code}'` is a real footgun.
 
-5. **`vary: User-Agent` on UA-conditional responses.** Browser and `Claude-User` (WebFetch) get different bodies at `/`, `/c/:id`, and any 404 (HTML page for humans, markdown SDK hint for agents). Without `vary` headers, any CDN cache would serve the wrong body to the wrong client.
+5. **HEX validation on `:id` and `?token=` is load-bearing.** Both values are interpolated literally into shell script bodies served from `/c/:id/bootstrap.sh`. The `HEX_RE` check in `src/page/render.ts` prevents shell injection. Don't disable it.
 
-6. **Auto-HELLO trigger is `$MY_CHALL` being set.** Joiner bootstrap sets it; initiator bootstrap doesn't. `loop.sh` checks once at startup. Don't move the HELLO send back into bootstrap — past QA caught race conditions where WELCOMEs arrived before the receiver was polling.
+6. **`vary: User-Agent` on UA-conditional responses.** Browser and `Claude-User` (WebFetch) get different bodies at `/`, `/c/:id`, and any 404 (HTML page for humans, markdown SDK hint for agents). Without `vary` headers, any CDN cache would serve the wrong body to the wrong client.
 
-7. **The handoff phrase matters.** "Talk to my other Claude — curl this URL to start: …" passes Claude Code's prompt-injection filter. Variants like "follow this URL" or naked URL paste have failed in past QA. The bridge ships this exact phrasing in the `share_message` body — don't rewrite it without testing both ends.
+7. **Auto-HELLO trigger is `$MY_CHALL` being set.** Joiner bootstrap sets it; initiator bootstrap doesn't. `loop.sh` checks once at startup. Don't move the HELLO send back into bootstrap — past QA caught race conditions where WELCOMEs arrived before the receiver was polling.
+
+8. **The handoff phrase matters.** "Talk to my other Claude — curl this URL to start: …" passes Claude Code's prompt-injection filter. Variants like "follow this URL" or naked URL paste have failed in past QA. The bridge ships this exact phrasing in the `share_message` body — don't rewrite it without testing both ends.
 
 ## Adding a feature — the process this project uses
 
@@ -122,6 +135,10 @@ src/page/helpers.sh          Send helpers (appended to session env file)
 src/page/protocol.md         Wire-protocol reference (appended to SDK pages)
 src/page/skill.md            Optional /agentalk skill body (served at /skill.md, written to ~/.claude/skills/agentalk/SKILL.md)
 src/page/skill-install.sh.tpl  One-line skill installer (served at /skill.sh)
+src/page/chat.html           Browser chat client for HUMAN participants (served at /c/:id to
+                             browsers). Self-contained: inline CSS+JS, no build step, no
+                             external requests. MUST be in package.json's build cp list.
+src/page/chat-error.html     Shown when a /c/... link reaches a browser malformed
 site/                        Astro site — ONE page only (index.astro, self-contained)
 site/astro.config.mjs        Astro config — no sitemap; HTML compression
 site/src/pages/index.astro   The entire human-facing site

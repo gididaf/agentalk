@@ -11,6 +11,15 @@
 set -u
 
 BRIDGE="${BRIDGE:-http://localhost:3000}"
+
+# The bridge UA-sniffs at `/`: a browser gets the Astro HTML landing page, an
+# LLM user agent gets the markdown SDK (see LLM_UA in src/bridge/index.ts).
+# curl's default UA is NOT an LLM UA, so any fetch of `/` here must send one —
+# otherwise every SDK assertion below silently runs against the human page and
+# fails for a reason that has nothing to do with the SDK. The opposite holds at
+# /c/:id, where `Claude-User` gets the short WebFetch stub and plain curl gets
+# the full joiner SDK — those fetches stay bare on purpose.
+LLM_UA='User-Agent: Claude-User'
 BRIDGE_LOG="${BRIDGE_LOG:-/tmp/agentalk-bridge.log}"
 PASS=0
 FAIL=0
@@ -92,12 +101,11 @@ ok "bridge up"
 
 # 1. initiator page documents envelope + rooms + welcome dispatch
 step "1. initiator page documents N-way rooms + envelope + welcome-on-HELLO"
-init=$(curl -fsS "$BRIDGE/")
+init=$(curl -fsS -H "$LLM_UA" "$BRIDGE/")
 echo "$init" | grep -Eq 'room|group'                                  && ok "initiator page mentions rooms/groups"                  || bad "no rooms/groups language"
-echo "$init" | grep -q '"text":'                                      && ok "initiator page documents {\"text\":...} envelope"      || bad "missing text envelope"
-echo "$init" | grep -q '"to":'                                        && ok "initiator page documents {\"to\":...} DM addressing"   || bad "missing to envelope"
-echo "$init" | grep -q '"hello":'                                     && ok "initiator page documents {\"hello\":...} arrival"      || bad "missing hello envelope"
-echo "$init" | grep -q '"welcome":'                                   && ok "initiator page documents {\"welcome\":...} reply"      || bad "missing welcome envelope"
+echo "$init" | grep -qF 'agentalk_say'  && ok "initiator page documents agentalk_say (broadcast)"        || bad "initiator page missing agentalk_say"
+echo "$init" | grep -qF 'agentalk_dm'   && ok "initiator page documents agentalk_dm (DM addressing)"     || bad "initiator page missing agentalk_dm"
+echo "$init" | grep -qiF 'hand-build'   && ok "initiator page forbids hand-built envelopes"              || bad "initiator page no longer forbids hand-built envelopes"
 echo "$init" | grep -Eq 'broadcast'                                   && ok "initiator page mentions broadcast"                     || bad "missing broadcast language"
 echo "$init" | grep -Eq '\bDM\b|direct message'                       && ok "initiator page mentions DM / direct message"           || bad "missing DM/direct-message language"
 echo "$init" | grep -Eqv '^\s*\$\s*Send PING'                         && ok "initiator no longer pre-sends PING (Phase 5 behavior gone)" || bad "PING-pre-send still in initiator page"
@@ -110,15 +118,23 @@ CHANNEL_ID=$(echo "$CREATE" | jq -r '.channel_id')
 TOKEN=$(echo "$CREATE" | jq -r '.token')
 join=$(curl -fsS "$BRIDGE/c/$CHANNEL_ID")
 echo "$join" | grep -Eq 'room|group'                                  && ok "joiner page mentions rooms/groups"                  || bad "no rooms/groups language"
-echo "$join" | grep -q '"text":'                                      && ok "joiner page documents {\"text\":...} envelope"      || bad "missing text envelope"
-echo "$join" | grep -q '"to":'                                        && ok "joiner page documents {\"to\":...} DM addressing"   || bad "missing to envelope"
-echo "$join" | grep -q '"hello":'                                     && ok "joiner page documents {\"hello\":...} arrival"      || bad "missing hello envelope"
-echo "$join" | grep -q '"welcome":'                                   && ok "joiner page documents {\"welcome\":...} reply"      || bad "missing welcome envelope"
-echo "$join" | grep -q 'OTHERS'                                       && ok "joiner page tells you to compute OTHERS list"       || bad "missing OTHERS list instruction"
+echo "$join" | grep -qF 'agentalk_say'  && ok "joiner page documents agentalk_say (broadcast)"        || bad "joiner page missing agentalk_say"
+echo "$join" | grep -qF 'agentalk_dm'   && ok "joiner page documents agentalk_dm (DM addressing)"     || bad "joiner page missing agentalk_dm"
+echo "$join" | grep -qiF 'hand-build'   && ok "joiner page forbids hand-built envelopes"              || bad "joiner page no longer forbids hand-built envelopes"
+echo "$join" | grep -qF 'others='     && ok "joiner page points at the bootstrap others= list"     || bad "joiner page missing others= instruction"
 echo "$join" | grep -Eq 'broadcast'                                   && ok "joiner page mentions broadcast"                     || bad "missing broadcast language"
 echo "$join" | grep -Eq '\bDM\b|direct message'                       && ok "joiner page mentions DM / direct message"           || bad "missing DM/direct-message language"
 
 # 3. 3-participant E2E: alice (initiator) + bob + carol, full handshake
+# 2b. The wire envelope moved off the pages and into the served scripts.
+step "2b. envelope format lives in helpers.sh + loop.sh"
+helpersh=$(curl -fsS "$BRIDGE/helpers.sh")
+loopsh=$(curl -fsS "$BRIDGE/loop.sh")
+printf '%s' "$helpersh" | grep -qF 'text:$t' && ok "helpers.sh builds the {text} broadcast envelope"  || bad "helpers.sh lost the text envelope"
+printf '%s' "$helpersh" | grep -qF 'to:$n'   && ok "helpers.sh builds the {to,text} DM envelope"      || bad "helpers.sh lost the to envelope"
+printf '%s' "$loopsh"   | grep -qF 'hello:$c'   && ok "loop.sh builds the {hello} arrival envelope"   || bad "loop.sh lost the hello envelope"
+printf '%s' "$loopsh"   | grep -qF 'welcome:$c' && ok "loop.sh builds the {welcome} reply envelope"   || bad "loop.sh lost the welcome envelope"
+
 step "3. 3-participant handshake — alice + bob + carol"
 CHANNEL_KEY=$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')
 

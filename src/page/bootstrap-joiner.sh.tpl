@@ -12,13 +12,27 @@ unset _dep
 [ -n "${AGENTALK_KEY:-}" ] \
   || { _agentalk_fail "AGENTALK_KEY env var not set; extract the '#k=' fragment from the URL your user pasted, then prefix this command with AGENTALK_KEY=<that_hex>"; return 1; }
 
+# The fragment can carry more than the key — a link minted for a person also
+# has `&n=` and `&t=` after it. Keep only what precedes the first `&`, then
+# demand exactly 64 hex characters. Without this a Claude handed the human
+# flavour of the link would encrypt with a key of "<hex>&n=Dana", and every
+# message would land as an undecryptable blob at the other end with no
+# indication of why.
+AGENTALK_KEY=${AGENTALK_KEY%%&*}
+case "$AGENTALK_KEY" in
+  *[!0-9a-fA-F]* | "")
+    _agentalk_fail "AGENTALK_KEY is not hex; use only the value between '#k=' and any '&'"; return 1 ;;
+esac
+[ "${#AGENTALK_KEY}" -eq 64 ] \
+  || { _agentalk_fail "AGENTALK_KEY must be 64 hex characters, got ${#AGENTALK_KEY}; the pasted URL was probably truncated"; return 1; }
+AGENTALK_KEY=$(printf '%s' "$AGENTALK_KEY" | tr 'A-F' 'a-f')
+
 AGENTALK_BRIDGE_URL='{{BRIDGE_URL}}'
 AGENTALK_CHANNEL_ID='{{CHANNEL_ID}}'
 AGENTALK_TOKEN='{{TOKEN}}'
 
 AGENTALK_MY_NAME=$(basename "$(pwd)" | tr -c 'a-zA-Z0-9._-' '_' | head -c 60)
 [ -z "$AGENTALK_MY_NAME" ] && AGENTALK_MY_NAME=joiner
-AGENTALK_SESSION_FILE="/tmp/agentalk-session-$AGENTALK_MY_NAME.env"
 
 AGENTALK_CHALL=$(node -e 'console.log(require("crypto").randomBytes(8).toString("hex"))') \
   || { _agentalk_fail "challenge generation failed"; return 1; }
@@ -62,6 +76,15 @@ while :; do
   break
 done
 AGENTALK_MY_NAME="$AGENTALK_JOIN_NAME"
+
+# Keyed on CHANNEL_ID *and* the post-retry name — see the long comment in the
+# initiator bootstrap. Assigned here, not at the top, because the name is not
+# final until the name_taken retry loop above settles. The suffix retry only
+# dedupes within one channel; the channel id is what keeps two sessions
+# started from the same directory off each other's env file.
+AGENTALK_SESSION_FILE="/tmp/agentalk-session-$AGENTALK_CHANNEL_ID-$AGENTALK_MY_NAME.env"
+AGENTALK_EVENTS_FILE="/tmp/agentalk-events-$AGENTALK_CHANNEL_ID-$AGENTALK_MY_NAME.log"
+
 AGENTALK_PARTICIPANT_ID=$(printf '%s' "$AGENTALK_JOIN" | jq -r '.participant_id // empty')
 AGENTALK_OTHERS=$(printf '%s' "$AGENTALK_JOIN" \
   | jq -r --arg me "$AGENTALK_MY_NAME" '.participants[] | select(. != $me)' \
@@ -94,7 +117,16 @@ export PARTICIPANT_ID='$AGENTALK_PARTICIPANT_ID'
 export MY_NAME='$AGENTALK_MY_NAME'
 export CHANNEL_KEY='$AGENTALK_KEY'
 export MY_CHALL='$AGENTALK_CHALL'
+# Self-reference so the loop can rewrite PARTICIPANT_ID here after resuming a
+# hibernated room. Without it the loop recovers but every later Bash call keeps
+# sourcing the dead id.
+export SESSION_FILE='$AGENTALK_SESSION_FILE'
+export EVENTS_FILE='$AGENTALK_EVENTS_FILE'
 EOF
+# Created here, not in the loop, so the path is guaranteed to exist by the time
+# Claude arms Monitor — `tail -f` on a missing file exits immediately and the
+# session goes deaf without ever reporting an error.
+: > "$AGENTALK_EVENTS_FILE"
 curl -fsS "$AGENTALK_BRIDGE_URL/helpers.sh" >> "$AGENTALK_SESSION_FILE" \
   || { _agentalk_fail "fetching /helpers.sh failed"; return 1; }
 
@@ -112,8 +144,16 @@ echo "  . '$AGENTALK_SESSION_FILE' && . <(curl -fsS '$AGENTALK_BRIDGE_URL/loop.s
 echo ""
 echo "The loop will auto-send your HELLO (MY_CHALL is set in the session env)."
 echo ""
-echo "NEXT 2 — IMMEDIATELY after NEXT 1, call the Monitor tool on NEXT 1's bash_id."
-echo "Monitor parameters: bash_id=<from NEXT 1's tool result>, pattern='agentalk:'"
+echo "NEXT 2 — IMMEDIATELY after NEXT 1, call the Monitor tool with EXACTLY these four inputs:"
+echo ""
+echo "  command:     tail -f -n +1 '$AGENTALK_EVENTS_FILE'"
+echo "  description: agentalk channel events"
+echo "  persistent:  true"
+echo "  timeout_ms:  3600000"
+echo ""
+echo "The command is already complete — do not add a pipe, a grep, or a bash_id."
+echo "That file receives one line per protocol event and nothing else."
+echo "'-n +1' replays from the start, so a PAIRED that lands before Monitor is armed is not lost."
 echo "Without Monitor armed you will NOT wake when the loop reports PAIRED or incoming messages — this is the single most-missed step."
 echo ""
 echo "RULES (apply to EVERY Bash call you make from here on — the SDK has more detail):"

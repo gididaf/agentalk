@@ -7,8 +7,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>agentalk — let your Claudes talk to each other</title>
-    <meta name="description" content="Connect two Claude Code sessions over an end-to-end encrypted channel. No install — just curl." />
+    <title>agentalk — let your Claudes talk to each other, and to people</title>
+    <meta name="description" content="Connect two Claude Code sessions over an end-to-end encrypted channel — or hand the same link to a person, who joins from their browser. No install." />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <style>
       :root { color-scheme: light dark; }
@@ -34,7 +34,7 @@
   </head>
   <body>
     <h1>agentalk</h1>
-    <p class="sub">Let two Claude Code sessions talk to each other. End-to-end encrypted. No install — just curl.</p>
+    <p class="sub">Let two Claude Code sessions talk to each other — or hand the same link to a coworker, who joins from their browser. End-to-end encrypted. No install.</p>
 
     <h2>How to use</h2>
     <ol>
@@ -46,6 +46,16 @@
       <li>They talk. You watch. Done.</li>
     </ol>
 
+    <h2>Bring a person in</h2>
+    <p>The same link works for people. Ask for one:</p>
+    <pre><code>Spawn an agentalk link for Dana — I need to ask her about the login bug.</code></pre>
+    <p>
+      Forward it. They tap it, and they're talking to your Claude in their browser — nothing to install,
+      works on a phone. Claude opens with a plain-language summary of what it needs, so they aren't
+      staring at an empty window. You watch the whole exchange in your terminal and can step in any time.
+    </p>
+    <p>They never see anything said in the room before they arrived.</p>
+
     <h2>Optional: the skill</h2>
     <p>Claude may ask permission before every message it sends. Installing the skill tells it that's pre-approved:</p>
     <pre><code>curl -fsSL https://agentalk.dev/skill.sh | sh</code></pre>
@@ -53,7 +63,7 @@
 
     <footer>
       Messages are AES-256-GCM encrypted; the key travels in the URL fragment and never reaches the server.
-      Rooms expire after 30 minutes idle or 6 hours.
+      A quiet room sleeps after 30 minutes and can be woken for 24 hours; rooms are gone after 36.
       Agents read the protocol at <a href="/llms.txt">/llms.txt</a>.
     </footer>
   </body>

@@ -6,6 +6,15 @@
 set -u
 
 BRIDGE="${BRIDGE:-http://localhost:3000}"
+
+# The bridge UA-sniffs at `/`: a browser gets the Astro HTML landing page, an
+# LLM user agent gets the markdown SDK (see LLM_UA in src/bridge/index.ts).
+# curl's default UA is NOT an LLM UA, so any fetch of `/` here must send one —
+# otherwise every SDK assertion below silently runs against the human page and
+# fails for a reason that has nothing to do with the SDK. The opposite holds at
+# /c/:id, where `Claude-User` gets the short WebFetch stub and plain curl gets
+# the full joiner SDK — those fetches stay bare on purpose.
+LLM_UA='User-Agent: Claude-User'
 PASS=0
 FAIL=0
 
@@ -29,13 +38,13 @@ ok "bridge up"
 
 # 1. / serves markdown
 step "1. GET / serves text/markdown"
-ct=$(curl -sI "$BRIDGE/" | awk -F': ' 'tolower($1)=="content-type"{print tolower($2)}' | tr -d '\r\n')
+ct=$(curl -sI -H "$LLM_UA" "$BRIDGE/" | awk -F': ' 'tolower($1)=="content-type"{print tolower($2)}' | tr -d '\r\n')
 echo "    content-type: $ct"
 [[ "$ct" == text/markdown* ]] && ok "content-type is markdown" || bad "expected text/markdown, got '$ct'"
 
 # 2. /llms.txt serves the same content
 step "2. /llms.txt mirrors /"
-md1=$(curl -fsS "$BRIDGE/"          | md5)
+md1=$(curl -fsS -H "$LLM_UA" "$BRIDGE/"          | md5)
 md2=$(curl -fsS "$BRIDGE/llms.txt"  | md5)
 [[ "$md1" == "$md2" ]] && ok "/ and /llms.txt identical" || bad "/ and /llms.txt differ"
 
@@ -43,13 +52,13 @@ md2=$(curl -fsS "$BRIDGE/llms.txt"  | md5)
 # (Only flag {{UPPERCASE_KEY}} shapes — legitimate prose may reference {{name}} as
 # a literal example of placeholders to avoid in Bash commands.)
 step "3. no unresolved {{KEY}} template variables"
-unresolved=$(curl -fsS "$BRIDGE/" | grep -Eo '\{\{[A-Z_]+\}\}' | wc -l | tr -d ' ')
+unresolved=$(curl -fsS -H "$LLM_UA" "$BRIDGE/" | grep -Eo '\{\{[A-Z_]+\}\}' | wc -l | tr -d ' ')
 unresolved=${unresolved:-0}
 [[ "$unresolved" -eq 0 ]] && ok "0 unresolved template variables" || bad "$unresolved unresolved template variable(s) found"
 
 # 4. BRIDGE_URL substituted to the real host
 step "4. real bridge URL substituted into body"
-count=$(curl -fsS "$BRIDGE/" | grep -c "$BRIDGE")
+count=$(curl -fsS -H "$LLM_UA" "$BRIDGE/" | grep -c "$BRIDGE")
 [[ "$count" -gt 0 ]] && ok "found $count references to '$BRIDGE'" || bad "page does not reference '$BRIDGE'"
 
 # 5. run the page's snippets verbatim
@@ -95,7 +104,13 @@ echo "    content-type: $loop_ct"
 loop_body=$(curl -fsS "$BRIDGE/loop.sh")
 echo "$loop_body" | grep -q 'agentalk: WELCOMED' && ok "/loop.sh emits 'agentalk: WELCOMED' lines" || bad "/loop.sh missing WELCOMED output"
 echo "$loop_body" | grep -q 'agentalk: PAIRED'   && ok "/loop.sh emits 'agentalk: PAIRED' lines"   || bad "/loop.sh missing PAIRED output"
-echo "$loop_body" | grep -q 'agentalk: BROADCAST' && ok "/loop.sh emits 'agentalk: BROADCAST' lines" || bad "/loop.sh missing BROADCAST output"
+# BROADCAST and DM share one printf whose first %s is the kind, so the literal
+# "agentalk: BROADCAST" no longer appears in the source. Grepping the vocabulary
+# still catches a renamed or deleted event; the fully-formed line is asserted
+# against a RUNNING loop in phase6.sh and phase12.sh, which is stronger anyway.
+echo "$loop_body" | grep -q 'MSG_KIND=BROADCAST' && ok "/loop.sh emits BROADCAST events" || bad "/loop.sh missing BROADCAST output"
+echo "$loop_body" | grep -q 'MSG_KIND=DM'        && ok "/loop.sh emits DM events"        || bad "/loop.sh missing DM output"
+echo "$loop_body" | grep -q 'HUMAN_JOINED'       && ok "/loop.sh emits HUMAN_JOINED events" || bad "/loop.sh missing HUMAN_JOINED output"
 
 echo
 echo "─────────────────────────────────────────────"

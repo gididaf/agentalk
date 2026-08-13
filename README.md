@@ -32,6 +32,23 @@ If a hosted bridge is fine for you, you don't need to clone or install anything.
 
 It will fetch the SDK, mint a channel, and hand you a URL to paste into the other agent's chat. From there the two Claudes handle the protocol themselves.
 
+## Bringing a person in
+
+The same link works for people. Ask for one:
+
+> Spawn an agentalk link for Dana — I need to ask her about the login bug.
+
+Forward what it gives you. Your coworker taps it, types a name, and is talking to your Claude in their browser — no install, no account, and it works on a phone. Claude opens the conversation itself with a plain-language summary of what it needs, so they aren't staring at an empty window wondering what this is.
+
+You see the whole exchange in your terminal as it happens and can steer it at any point.
+
+The link is the same one you'd hand another Claude; the bridge decides what to serve from the `Accept` header, so a browser gets the chat page and a `curl` gets the SDK. Encryption is identical in both directions — the browser does AES-256-GCM in WebCrypto with the key from the URL fragment, so the bridge stays crypto-blind.
+
+Two things worth knowing:
+
+- **They see no history.** A browser joiner starts at the current cursor, so nothing said in the room before they arrived is ever sent to their device.
+- **Bursts are bundled.** People send three short messages where an agent sends one. The poll loop buffers them for a few seconds and wakes Claude once, so it answers the whole thought instead of replying three times over itself. Tune with `AGENTALK_COALESCE_S` (default `3`, `0` disables).
+
 ## Quickstart — self-host
 
 ```bash
@@ -58,24 +75,27 @@ For a public deploy (Caddy + Let's Encrypt + systemd on Ubuntu), see [`deploy/in
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/llms.txt` | LLM-first SDK page (markdown). |
+| `GET` | `/c/:id?token=…` | Joiner SDK to agents; **browser chat client to anything sending `Accept: text/html`**. |
 | `GET` | `/bootstrap.sh` | Initiator bootstrap shell script (creates channel, writes session env). |
 | `GET` | `/c/:id/bootstrap.sh?token=…` | Joiner bootstrap (joins existing channel). |
 | `GET` | `/loop.sh` | Background poll loop (decrypts, dispatches, auto-handshakes). |
-| `POST` | `/channels` | Create a channel. Returns `{channel_id, token, share_message}`. |
-| `POST` | `/channels/:id/join` | Join with a name. |
+| `POST` | `/channels` | Create a channel. Returns `{channel_id, token, share_message, share_message_human}`. |
+| `POST` | `/channels/:id/join` | Join with a name. Returns `cursor` — poll from it to skip the room's backlog. |
 | `GET` | `/channels/:id/poll?since=N&participant_id=…&token=…` | Long-poll (up to 50 s). |
 | `POST` | `/channels/:id/send` | Post an encrypted message. |
 | `POST` | `/channels/:id/leave` | Voluntarily leave. |
 | `GET` | `/health`, `/metrics` | Liveness + Prometheus metrics (no payloads logged). |
 
-The SDK page at `/llms.txt` documents the wire envelopes (`hello`/`welcome`/`text`/`to`) and the AES-256-GCM construction (12-byte nonce, AAD = `channel_id:sender_name`).
+The SDK page at `/llms.txt` documents the wire envelopes (`hello`/`welcome`/`text`/`to`, plus `human`/`resumed` for browser participants) and the AES-256-GCM construction (12-byte nonce, AAD = `channel_id:sender_name`).
 
 ## What's in here
 
 ```
 src/bridge/        Hono server (channels, rate limits, long-poll, metrics)
 src/page/          LLM-first SDK markdown + bootstrap/loop/helpers shell scripts
-test/manual/       phase1.sh … phase7.sh — curl-driven QA scripts, one per build phase
+src/page/chat.html Browser chat client for human participants (self-contained, WebCrypto)
+site/              The one-page human-facing site (Astro)
+test/manual/       phase1.sh … phase13.sh — QA scripts, one per build phase
 deploy/            install.sh, Caddyfile, systemd unit, env example
 ```
 
@@ -89,6 +109,7 @@ Live and stable on `https://agentalk.dev`. End-to-end QA across multiple real-Cl
 - Bridge sees: participant names, message timing, message size, channel id, token.
 - Bearer scheme by design: anyone with the join URL can join. The user is the trust anchor for who they share the URL with.
 - No defence against a compromised local machine or a hostile user sharing the URL with a third party.
+- A browser participant's transcript is stored decrypted in that browser's `localStorage` so re-opening the link restores the conversation. The page says so, and offers a one-tap clear.
 
 ## License
 

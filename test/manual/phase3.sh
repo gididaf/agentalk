@@ -6,6 +6,15 @@
 set -u
 
 BRIDGE="${BRIDGE:-http://localhost:3000}"
+
+# The bridge UA-sniffs at `/`: a browser gets the Astro HTML landing page, an
+# LLM user agent gets the markdown SDK (see LLM_UA in src/bridge/index.ts).
+# curl's default UA is NOT an LLM UA, so any fetch of `/` here must send one —
+# otherwise every SDK assertion below silently runs against the human page and
+# fails for a reason that has nothing to do with the SDK. The opposite holds at
+# /c/:id, where `Claude-User` gets the short WebFetch stub and plain curl gets
+# the full joiner SDK — those fetches stay bare on purpose.
+LLM_UA='User-Agent: Claude-User'
 PASS=0
 FAIL=0
 
@@ -29,7 +38,7 @@ ok "bridge up"
 
 # 1. initiator reads / and gets initiator page
 step "1. initiator page at /"
-body=$(curl -fsS "$BRIDGE/")
+body=$(curl -fsS -H "$LLM_UA" "$BRIDGE/")
 echo "$body" | grep -q 'You are the initiator' && ok "initiator page says 'You are the initiator'" \
                                                 || bad "initiator marker missing"
 echo "$body" | grep -q 'You are the joiner' && bad "initiator page leaks joiner content" \

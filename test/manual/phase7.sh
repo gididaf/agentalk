@@ -16,6 +16,14 @@ set -u
 PORT=3001
 BRIDGE="http://localhost:$PORT"
 BRIDGE_LOG="/tmp/agentalk-phase7-bridge.log"
+# The bridge UA-sniffs at `/`: a browser gets the Astro HTML landing page, an
+# LLM user agent gets the markdown SDK (see LLM_UA in src/bridge/index.ts).
+# curl's default UA is NOT an LLM UA, so any fetch of `/` here must send one —
+# otherwise every SDK assertion below silently runs against the human page and
+# fails for a reason that has nothing to do with the SDK. The opposite holds at
+# /c/:id, where `Claude-User` gets the short WebFetch stub and plain curl gets
+# the full joiner SDK — those fetches stay bare on purpose.
+LLM_UA='User-Agent: Claude-User'
 PIDFILE="/tmp/agentalk-phase7.pid"
 PASS=0
 FAIL=0
@@ -160,22 +168,35 @@ TOK=$(echo "$CR" | jq -r '.token')
 A=$(curl -fsS -X POST "$BRIDGE/channels/$CHID/join" -H 'content-type: application/json' \
   -d "$(jq -nc --arg t "$TOK" '{token:$t, name:"a"}')")
 APID=$(echo "$A" | jq -r '.participant_id')
-# Idle 1s + 300ms sweep means a poll within ~2s should fetch a system event.
+# Idle 1s + 300ms sweep. Going quiet no longer DESTROYS the room — it puts it to
+# sleep, keeping id and token valid so the same participants can re-join and
+# carry on. Full sleep/resume coverage lives in phase8.sh; what this step guards
+# is that quiet never routes to eviction again.
 sleep 2
-POLL=$(curl -fsS "$BRIDGE/channels/$CHID/poll?token=$TOK&participant_id=$APID&since=0" || true)
-echo "$POLL" | jq -e '.messages[] | select(.type=="system" and .reason=="evicted_idle")' >/dev/null \
-  && ok "idle eviction emitted {type:system, reason:evicted_idle}" \
-  || bad "no system message after idle: $POLL"
+CODE=$(curl -s -o /tmp/agentalk-p7-idle.json -w "%{http_code}" "$BRIDGE/channels/$CHID/poll?token=$TOK&participant_id=$APID&since=0")
+POLL=$(cat /tmp/agentalk-p7-idle.json)
+[[ "$CODE" = "404" ]] && ok "poll on a quiet room returns 404" || bad "expected 404 after idle, got $CODE"
+echo "$POLL" | jq -e '.hibernating == true' >/dev/null \
+  && ok "quiet room hibernated (recoverable), not evicted" \
+  || bad "room did not hibernate: $POLL"
+echo "$POLL" | jq -e '.evicted_reason == "hibernating"' >/dev/null \
+  && ok "404 body still carries evicted_reason for pre-hibernation loops" \
+  || bad "missing evicted_reason: $POLL"
 
-# After tombstone (5s), channel should 404.
-sleep 6
-CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BRIDGE/channels/$CHID/poll?token=$TOK&participant_id=$APID&since=0")
-[[ "$CODE" = "404" ]] && ok "channel returns 404 after tombstone window" || bad "expected 404 after tombstone, got $CODE"
+# The token still opens the room — that is the whole point.
+REJOINED=$(curl -sS -X POST "$BRIDGE/channels/$CHID/join" -H 'content-type: application/json' \
+  -d "$(jq -nc --arg t "$TOK" '{token:$t, name:"a"}')")
+echo "$REJOINED" | jq -e '.participant_id' >/dev/null \
+  && ok "the same token re-opens the room after it went quiet" \
+  || bad "room was not resumable: $REJOINED"
 
-# metrics counter incremented
+# metrics: hibernation counted, idle eviction NOT.
 M=$(curl -fsS "$BRIDGE/metrics")
+HIB_COUNT=$(echo "$M" | grep -E '^agentalk_hibernations_total' | awk '{print $NF}')
 IDLE_COUNT=$(echo "$M" | grep -E '^agentalk_evictions_total\{reason="idle"\}' | awk '{print $NF}')
-[[ "${IDLE_COUNT:-0}" -ge 1 ]] && ok "idle-eviction counter is $IDLE_COUNT" || bad "idle counter not incremented"
+[[ "${HIB_COUNT:-0}" -ge 1 ]] && ok "hibernation counter is $HIB_COUNT" || bad "hibernation not counted"
+[[ "${IDLE_COUNT:-0}" -eq 0 ]] && ok "idle-eviction counter stayed 0" \
+  || bad "a quiet room was still evicted for idle (count=$IDLE_COUNT)"
 
 step "6. max-messages eviction"
 cleanup
@@ -256,11 +277,20 @@ PAYLOAD_HITS=$(wc -l </tmp/agentalk-phase7-payload-grep | tr -d ' ')
 [[ "$PAYLOAD_HITS" = "0" ]] && ok "no message payloads in bridge log" || bad "found $PAYLOAD_HITS lines that look like payloads (see /tmp/agentalk-phase7-payload-grep)"
 
 step "10. pages document SYSTEM events"
-INIT=$(curl -fsS "$BRIDGE/")
+INIT=$(curl -fsS -H "$LLM_UA" "$BRIDGE/")
 echo "$INIT" | grep -q 'agentalk: SYSTEM' && ok "initiator page mentions SYSTEM events" || bad "initiator page missing SYSTEM docs"
 JOIN=$(curl -fsS "$BRIDGE/c/dummy")
 echo "$JOIN" | grep -q 'agentalk: SYSTEM' && ok "joiner page mentions SYSTEM events"     || bad "joiner page missing SYSTEM docs"
-echo "$INIT" | grep -q 'evicted_idle'      && ok "initiator page lists eviction reasons"  || bad "initiator page missing eviction reasons"
+echo "$INIT" | grep -q 'evicted_hibernate_expired' && ok "initiator page lists eviction reasons" || bad "initiator page missing eviction reasons"
+echo "$INIT" | grep -q 'agentalk: RESUMED' && ok "initiator page documents automatic resume" \
+                                           || bad "initiator page does not tell Claude the loop self-recovers"
+echo "$JOIN" | grep -q 'agentalk: RESUMED' && ok "joiner page documents automatic resume" \
+                                           || bad "joiner page does not tell Claude the loop self-recovers"
+# The recovery must read as "carry on", not "start again" — a Claude that
+# re-bootstraps on every Wi-Fi blip orphans the peer in the old room.
+echo "$INIT" | grep -q 'do not re-bootstrap\|do \*\*not\*\* re-bootstrap' \
+  && ok "initiator page tells Claude NOT to re-bootstrap after a resume" \
+  || bad "initiator page may leave Claude re-bootstrapping after a resume"
 
 echo
 echo "summary: $(green "$PASS passed"), $(red "$FAIL failed")"

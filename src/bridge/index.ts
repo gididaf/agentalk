@@ -4,8 +4,11 @@ import type { Context } from "hono";
 import { ChannelStore } from "./channels.js";
 import { RateLimiter, loadConfig as loadRateLimitConfig } from "./rate-limit.js";
 import { renderMetrics } from "./metrics.js";
+import { randomBytes } from "node:crypto";
 import {
   loadSiteAsset,
+  renderChat,
+  renderChatLinkError,
   renderHelpersScript,
   renderInitiator,
   renderInitiatorBootstrap,
@@ -24,6 +27,12 @@ const startedAt = Date.now();
 store.onEviction((channelId, creatorIp, reason) => {
   rateLimiter.releaseChannel(creatorIp, channelId);
   log("channel_evicted", { channel_id: channelId, reason });
+});
+// Sleeping rooms give their concurrent-channel slot back — see HibernationListener
+// in channels.ts for why waking does not take one again.
+store.onHibernation((channelId, creatorIp) => {
+  rateLimiter.releaseChannel(creatorIp, channelId);
+  log("channel_hibernated", { channel_id: channelId });
 });
 store.startSweep();
 const app = new Hono();
@@ -82,6 +91,23 @@ function shouldServeSdkAtRoot(ua: string): boolean {
   return LLM_UA.test(ua);
 }
 
+// /c/:id serves three different bodies, so it needs its own rule — and it is
+// the INVERSE of the one at `/`. There, an LLM UA opts in to markdown and
+// everything else gets HTML. Here the default must stay markdown: curl's UA
+// (`curl/8.x`) matches none of the patterns above, and the joiner SDK reaching
+// a curling Claude is the canonical path this whole project depends on
+// (asserted in test/manual/phase2.sh). So browsers opt IN to the chat UI and
+// every unknown client keeps the pre-existing behaviour.
+//
+// The test is `Accept`, not a browser-UA regex: Claude-User's real UA string
+// contains `Mozilla/5.0`, so a /Mozilla|Chrome|Safari/ pattern would be correct
+// only by branch ordering, and would rot as new browsers ship. Asking for
+// text/html is what actually distinguishes a browser from curl's `*/*`.
+function shouldServeChatUi(ua: string, accept: string): boolean {
+  if (LLM_UA.test(ua) || SEARCH_BOT_UA.test(ua)) return false;
+  return accept.includes("text/html");
+}
+
 const initiatorHandler = (c: Context) =>
   c.body(renderInitiator(bridgeBase(c)), 200, markdownHeaders);
 
@@ -89,14 +115,61 @@ const joinerHandler = (c: Context) => {
   const id = c.req.param("id") ?? "";
   const token = c.req.query("token") ?? "";
   const ua = c.req.header("user-agent") ?? "";
+  const accept = c.req.header("accept") ?? "";
+  // Three UA-conditional bodies live at this path, so every branch below must
+  // carry `vary` or a CDN will hand one client another's body. Accept is in the
+  // key too, since that is what the chat branch actually switches on.
+  const joinerVary = "User-Agent, Accept";
   if (WEBFETCH_UA.test(ua)) {
     return c.body(renderJoinerWebFetchStub(bridgeBase(c), id, token), 200, {
       "content-type": "text/markdown; charset=utf-8",
       "cache-control": "no-store",
-      vary: "User-Agent",
+      vary: joinerVary,
     });
   }
-  return c.body(renderJoiner(bridgeBase(c), id, token), 200, markdownHeaders);
+  if (shouldServeChatUi(ua, accept)) {
+    const nonce = randomBytes(16).toString("base64");
+    const page = renderChat(id, token, nonce);
+    // renderChat returns null when the id or token is not hex. Both are
+    // interpolated into the page body, so this is the same load-bearing
+    // validation that guards the bootstrap route — see render.ts.
+    if (page === null) {
+      return c.body(renderChatLinkError(), 400, {
+        "content-type": "text/html; charset=utf-8",
+        "cache-control": "no-store",
+        vary: joinerVary,
+      });
+    }
+    return c.body(page, 200, {
+      "content-type": "text/html; charset=utf-8",
+      // Never `public` like the landing page: this body embeds the channel
+      // token, so a shared cache holding it would be handing out credentials.
+      "cache-control": "no-store",
+      vary: joinerVary,
+      // The URL carries ?token=, so it must never ride along in a Referer.
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+      // The page renders peer-controlled names and message bodies. Those all
+      // go through textContent, so this is the second line of defence, not the
+      // first — but a nonce means even a successful injection cannot execute.
+      // connect-src 'self' is what lets it reach /channels/*; img-src 'none'
+      // and the absent default-src fallback keep it from phoning anywhere else.
+      "content-security-policy": [
+        "default-src 'none'",
+        `script-src 'nonce-${nonce}'`,
+        `style-src 'nonce-${nonce}'`,
+        "connect-src 'self'",
+        "img-src 'none'",
+        "base-uri 'none'",
+        "form-action 'none'",
+        "frame-ancestors 'none'",
+      ].join("; "),
+    });
+  }
+  return c.body(renderJoiner(bridgeBase(c), id, token), 200, {
+    ...markdownHeaders,
+    vary: joinerVary,
+  });
 };
 
 app.get("/", (c) => {
@@ -274,6 +347,23 @@ Talk to my other Claude — curl this URL to start:
 ${shareUrl}
 
 (Background poll is armed; I'll wake automatically once a peer joins and completes the handshake.)`;
+  // The same URL, worded for a PERSON who will open it in a browser rather than
+  // an agent who will curl it. Kept as a separate field, never folded into
+  // share_message: that wording was tuned against real receiving Claudes'
+  // prompt-injection filters and editing it has broken joins before.
+  //
+  // __TOPIC__ is substituted by Claude, __KEY__ by the initiator bootstrap.
+  // Underscore sentinels, not braces — Claude Code's Bash tool reserves {…}
+  // for its own placeholder substitution.
+  // Every line here is addressed to the RECIPIENT and gets forwarded as-is.
+  // Instructions for Claude live in the SDK page and the bootstrap's NEXT 3,
+  // never in this string — anything in here ends up in the coworker's inbox.
+  const shareMessageHuman = `Hi — I'm Claude, an AI assistant, and I'm helping with __TOPIC__. Could I ask you a quick question about it?
+
+Tap here to chat with me directly. It opens in your browser and there's nothing to install:
+${shareUrl}
+
+The conversation is end-to-end encrypted and disappears once everyone closes it.`;
   return c.json({
     channel_id,
     token,
@@ -281,6 +371,7 @@ ${shareUrl}
     api_poll_url: `${base}/channels/${channel_id}/poll`,
     api_send_url: `${base}/channels/${channel_id}/send`,
     share_message: shareMessage,
+    share_message_human: shareMessageHuman,
   });
 });
 
@@ -299,7 +390,39 @@ function channelGoneBody(id: string, error: string) {
   };
 }
 
+// A sleeping room is NOT gone, but it has to look survivable to a client that
+// predates hibernation. Hence 404 (the status every existing loop already treats
+// as terminal-but-clean) carrying `evicted_reason: "hibernating"`, which those
+// loops print as `agentalk: SYSTEM hibernating` before exiting tidily — strictly
+// better than the `bad_request` they would otherwise report. The `hibernating`
+// and `rejoin` flags are the forward path: a loop that understands them re-joins
+// with the same token instead of exiting. Until that ships, this is a clean stop,
+// not a recovery.
+function hibernatingBody(error: string) {
+  return {
+    error,
+    hibernating: true,
+    rejoin: true,
+    evicted_reason: "hibernating",
+  };
+}
+
+// Every channel route funnels its store error through here so the hibernating
+// case can never be missed on one endpoint and handled on another.
+function channelErrorStatus(id: string, error: string) {
+  if (error === "channel_hibernating") return [hibernatingBody(error), 404] as const;
+  if (error === "channel_or_token_invalid") return [channelGoneBody(id, error), 404] as const;
+  return [{ error }, 400] as const;
+}
+
 app.post("/channels/:id/join", async (c) => {
+  const joinIp = clientIp(c);
+  const joinDecision = rateLimiter.checkJoin(joinIp);
+  if (!joinDecision.allowed) {
+    log("ratelimit_reject", { endpoint: "join", ip: joinIp, reason: joinDecision.reason });
+    c.header("Retry-After", String(joinDecision.retryAfterSec));
+    return c.json({ error: joinDecision.reason, retry_after_sec: joinDecision.retryAfterSec }, 429);
+  }
   const id = c.req.param("id");
   let body: unknown;
   try {
@@ -316,9 +439,8 @@ app.post("/channels/:id/join", async (c) => {
   const result = store.join(id, token, name, key_fp);
   if ("error" in result) {
     log("join_failed", { channel_id: id, reason: result.error });
-    return result.error === "channel_or_token_invalid"
-      ? c.json(channelGoneBody(id, result.error), 404)
-      : c.json(result, 400);
+    const [errBody, errStatus] = channelErrorStatus(id, result.error);
+    return c.json(errBody, errStatus);
   }
   log("join", { channel_id: id, name });
   return c.json(result);
@@ -350,9 +472,8 @@ app.post("/channels/:id/send", async (c) => {
   const result = store.send(id, token, participant_id, text);
   if ("error" in result) {
     log("send_failed", { channel_id: id, reason: result.error });
-    return result.error === "channel_or_token_invalid"
-      ? c.json(channelGoneBody(id, result.error), 404)
-      : c.json(result, 400);
+    const [errBody, errStatus] = channelErrorStatus(id, result.error);
+    return c.json(errBody, errStatus);
   }
   log("send", { channel_id: id, participant_id, bytes: text.length });
   return c.json(result);
@@ -374,9 +495,8 @@ app.get("/channels/:id/poll", async (c) => {
   }
   const result = await store.poll(id, token, participantId, since);
   if ("error" in result) {
-    return result.error === "channel_or_token_invalid"
-      ? c.json(channelGoneBody(id, result.error), 404)
-      : c.json(result, 400);
+    const [errBody, errStatus] = channelErrorStatus(id, result.error);
+    return c.json(errBody, errStatus);
   }
   c.header("cache-control", "no-store");
   // Always 200 with a body — an empty long-poll used to return a bare 204,
@@ -405,9 +525,8 @@ app.post("/channels/:id/leave", async (c) => {
   }
   const result = store.leave(id, token, participant_id);
   if ("error" in result) {
-    return result.error === "channel_or_token_invalid"
-      ? c.json(channelGoneBody(id, result.error), 404)
-      : c.json(result, 400);
+    const [errBody, errStatus] = channelErrorStatus(id, result.error);
+    return c.json(errBody, errStatus);
   }
   log("leave", { channel_id: id, participant_id });
   return c.json(result);

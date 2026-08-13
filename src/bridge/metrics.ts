@@ -30,9 +30,15 @@ export function renderMetrics(
   );
 
   lines.push(
-    "# HELP agentalk_channels Active (non-evicted) channels.",
+    "# HELP agentalk_channels Awake channels (excludes hibernating).",
     "# TYPE agentalk_channels gauge",
     metricLine("agentalk_channels", stats.channels),
+  );
+
+  lines.push(
+    "# HELP agentalk_channels_hibernating Sleeping channels still resumable by re-join.",
+    "# TYPE agentalk_channels_hibernating gauge",
+    metricLine("agentalk_channels_hibernating", stats.channels_hibernating),
   );
 
   lines.push(
@@ -59,6 +65,21 @@ export function renderMetrics(
     metricLine("agentalk_evictions_total", stats.evictions.evicted_idle, { reason: "idle" }),
     metricLine("agentalk_evictions_total", stats.evictions.evicted_max_lifetime, { reason: "max_lifetime" }),
     metricLine("agentalk_evictions_total", stats.evictions.evicted_max_messages, { reason: "max_messages" }),
+    metricLine("agentalk_evictions_total", stats.evictions.evicted_hibernate_expired, { reason: "hibernate_expired" }),
+  );
+
+  // The ratio of these two is the health signal for the whole feature: rooms
+  // that hibernate and never resume are rooms the user gave up on.
+  lines.push(
+    "# HELP agentalk_hibernations_total Channels put to sleep after going quiet.",
+    "# TYPE agentalk_hibernations_total counter",
+    metricLine("agentalk_hibernations_total", stats.total_hibernations),
+  );
+
+  lines.push(
+    "# HELP agentalk_resumes_total Sleeping channels revived by a re-join.",
+    "# TYPE agentalk_resumes_total counter",
+    metricLine("agentalk_resumes_total", stats.total_resumes),
   );
 
   lines.push(
@@ -66,6 +87,7 @@ export function renderMetrics(
     "# TYPE agentalk_ratelimit_rejections_total counter",
     metricLine("agentalk_ratelimit_rejections_total", rl.rejections.channels, { kind: "channels" }),
     metricLine("agentalk_ratelimit_rejections_total", rl.rejections.messages, { kind: "messages" }),
+    metricLine("agentalk_ratelimit_rejections_total", rl.rejections.joins, { kind: "joins" }),
     metricLine("agentalk_ratelimit_rejections_total", rl.rejections.concurrent, { kind: "concurrent_channels" }),
   );
 

@@ -9,6 +9,15 @@
 set -u
 
 BRIDGE="${BRIDGE:-http://localhost:3000}"
+
+# The bridge UA-sniffs at `/`: a browser gets the Astro HTML landing page, an
+# LLM user agent gets the markdown SDK (see LLM_UA in src/bridge/index.ts).
+# curl's default UA is NOT an LLM UA, so any fetch of `/` here must send one —
+# otherwise every SDK assertion below silently runs against the human page and
+# fails for a reason that has nothing to do with the SDK. The opposite holds at
+# /c/:id, where `Claude-User` gets the short WebFetch stub and plain curl gets
+# the full joiner SDK — those fetches stay bare on purpose.
+LLM_UA='User-Agent: Claude-User'
 BRIDGE_LOG="${BRIDGE_LOG:-/tmp/agentalk-bridge.log}"
 PASS=0
 FAIL=0
@@ -66,15 +75,14 @@ ok "bridge up"
 
 # 1. initiator page advertises encryption protocol
 step "1. initiator page documents the encryption protocol"
-init=$(curl -fsS "$BRIDGE/")
+init=$(curl -fsS -H "$LLM_UA" "$BRIDGE/")
 echo "$init" | grep -q 'AES-256-GCM'        && ok "initiator page names AES-256-GCM"        || bad "missing AES-256-GCM mention"
 echo "$init" | grep -q '#k='                && ok "initiator page shows #k= URL fragment"   || bad "missing #k= fragment"
-echo "$init" | grep -q 'createCipheriv'     && ok "initiator page uses node createCipheriv" || bad "missing node createCipheriv recipe"
-echo "$init" | grep -q 'select(.from != $me)' && ok "initiator BG loop uses self-filter"   || bad "initiator BG loop missing self-filter"
-echo "$init" | grep -q 'Talk to my other Claude' && ok "initiator handoff uses 'Talk to my other Claude' user-voiced invite" \
-                                              || bad "initiator handoff missing user-voiced invite phrasing"
-echo "$init" | grep -q 'curl this URL to start' && ok "suggested invite uses proven 'curl this URL to start' template" \
-                                              || bad "suggested invite missing 'curl this URL to start' template"
+# The crypto recipe and the invite wording used to be inline on this page.
+# Both moved: encryption into helpers.sh, the invite into the bridge-rendered
+# share_message. Asserted below in 1b/1c, where they now actually ship.
+echo "$init" | grep -qi 'do not rewrite'    && ok "initiator page forbids rewriting the tuned share message" \
+                                            || bad "initiator page no longer protects the share message from rewriting"
 echo "$init" | grep -Eq 'prompt-injection|browser link' && ok "initiator handoff explains the tightrope (injection vs browser vs follow-it)" \
                                               || bad "initiator handoff doesn't explain the failure modes"
 
@@ -86,11 +94,30 @@ TOKEN=$(echo "$CREATE" | jq -r '.token')
 join=$(curl -fsS "$BRIDGE/c/$CHANNEL_ID")
 echo "$join" | grep -q 'AES-256-GCM'        && ok "joiner page names AES-256-GCM"        || bad "missing AES-256-GCM mention"
 echo "$join" | grep -q '#k='                && ok "joiner page references #k= fragment"  || bad "missing #k= fragment"
-echo "$join" | grep -q 'createDecipheriv'   && ok "joiner page uses node createDecipheriv" || bad "missing node createDecipheriv recipe"
 echo "$join" | grep -qi 'extract'           && ok "joiner page tells you to extract the key from the URL" || bad "missing URL extraction instruction"
-echo "$join" | grep -q 'select(.from != $me)' && ok "joiner BG loop uses self-filter"    || bad "joiner BG loop missing self-filter"
 
 # 3. real round trip through the bridge
+# 1b. The handoff phrasing is the single most failure-prone string in the whole
+# project (3 known refusal modes). It is rendered server-side into
+# share_message, so that is what has to be guarded — not the page prose.
+step "1b. share_message carries the proven handoff phrasing"
+SHARE=$(curl -fsS -X POST "$BRIDGE/channels" | jq -r '.share_message')
+printf '%s' "$SHARE" | grep -qF 'Talk to my other Claude' \
+  && ok "share_message uses the user-voiced invite" || bad "share_message lost 'Talk to my other Claude'"
+printf '%s' "$SHARE" | grep -qF 'curl this URL to start' \
+  && ok "share_message uses the proven 'curl this URL to start' template" || bad "share_message lost 'curl this URL to start'"
+printf '%s' "$SHARE" | grep -Eq 'prompt-injection|browser link' \
+  && ok "share_message explains why the wording matters" || bad "share_message no longer explains the tightrope"
+
+# 1c. Claude writes no crypto and no poll loop any more; both are served.
+step "1c. crypto + self-filter live in the served scripts"
+helpersh=$(curl -fsS "$BRIDGE/helpers.sh")
+loopsh=$(curl -fsS "$BRIDGE/loop.sh")
+printf '%s' "$helpersh" | grep -qF 'createCipheriv'   && ok "helpers.sh encrypts via node createCipheriv"   || bad "helpers.sh lost createCipheriv"
+printf '%s' "$helpersh" | grep -qF 'createDecipheriv' && ok "helpers.sh decrypts via node createDecipheriv" || bad "helpers.sh lost createDecipheriv"
+printf '%s' "$loopsh"   | grep -qF 'select(.from != $me)' \
+  && ok "loop.sh self-filters your own messages" || bad "loop.sh lost the self-filter"
+
 step "3. real encrypt-send-poll-decrypt round trip through the bridge"
 CHANNEL_KEY=$(node -e 'console.log(require("crypto").randomBytes(32).toString("hex"))')
 

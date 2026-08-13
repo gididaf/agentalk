@@ -129,6 +129,33 @@ export function renderInitiatorBootstrap(bridgeUrl: string): string {
   });
 }
 
+// The browser chat client, served at /c/:id to User-Agents that ask for HTML.
+//
+// Returns null if channelId or token are not hex — caller should 400. Same
+// reasoning as the bootstrap below, one layer over: these are interpolated
+// literally into a script body, and here that body is JavaScript in an HTML
+// document, so non-hex would be script injection.
+//
+// Deliberately takes NO bridge URL. bridgeBase() is derived from the
+// client-controlled Host / X-Forwarded-Proto headers; that is harmless inside
+// markdown but is a reflected-XSS primitive inside HTML. The page is served
+// same-origin by this very bridge, so it uses relative URLs and the whole
+// class of bug disappears.
+export function renderChat(channelId: string, token: string, nonce: string): string | null {
+  if (!HEX_RE.test(channelId) || !HEX_RE.test(token)) return null;
+  return fill(load("chat.html"), {
+    CHANNEL_ID: channelId,
+    TOKEN: token,
+    CSP_NONCE: nonce,
+  });
+}
+
+// Shown when someone opens a /c/... link in a browser but the id or token is
+// malformed — usually a URL that got truncated by a messaging app.
+export function renderChatLinkError(): string {
+  return load("chat-error.html");
+}
+
 // Returns null if channelId or token are not hex — caller should 400.
 // Hex validation is load-bearing: both values are interpolated literally
 // into the shell script body, so non-hex would be shell injection.

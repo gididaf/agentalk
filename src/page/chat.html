@@ -1,0 +1,1107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- The URL of this page carries ?token=. Without this, any outbound request
+     would leak channel credentials in the Referer header. -->
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex,nofollow">
+<title>agentalk</title>
+<style nonce="{{CSP_NONCE}}">
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfbfa;
+    --fg: #1a1a19;
+    --dim: #6b6b68;
+    --line: #e3e3e0;
+    --mine: #2f6f4e;
+    --mine-fg: #ffffff;
+    --theirs: #ffffff;
+    --code-bg: #f2f2ef;
+    --accent: #2f6f4e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #191918;
+      --fg: #ececea;
+      --dim: #9a9a95;
+      --line: #333331;
+      --mine: #3d8a63;
+      --mine-fg: #ffffff;
+      --theirs: #252523;
+      --code-bg: #101010;
+      --accent: #6cc79a;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  #app { display: none; flex-direction: column; height: 100dvh; }
+  #app.on { display: flex; }
+
+  /* ---- header ---- */
+  header {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: .6rem;
+    padding: .7rem 1rem;
+    padding-top: calc(.7rem + env(safe-area-inset-top));
+    border-bottom: 1px solid var(--line);
+    background: var(--bg);
+  }
+  .brand { font-weight: 600; letter-spacing: -.01em; }
+  #roster { flex: 1 1 auto; min-width: 0; color: var(--dim); font-size: .82rem;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+  #dot.live { background: var(--accent); }
+  #dot.warn { background: #d98324; }
+  #dot.off  { background: #b4453a; }
+  .iconbtn {
+    flex: 0 0 auto; border: 1px solid var(--line); background: transparent;
+    color: var(--dim); border-radius: 6px; padding: .25rem .45rem;
+    font-size: .85rem; cursor: pointer; line-height: 1;
+  }
+  .iconbtn[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+
+  /* ---- transcript ---- */
+  #log {
+    flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain;
+    padding: 1rem; display: flex; flex-direction: column; gap: .6rem;
+  }
+  .msg { max-width: min(46rem, 85%); border-radius: 14px; padding: .5rem .75rem;
+         background: var(--theirs); border: 1px solid var(--line);
+         overflow-wrap: anywhere; }
+  .msg.mine { align-self: flex-end; background: var(--mine); color: var(--mine-fg);
+              border-color: transparent; }
+  .who { font-size: .72rem; font-weight: 600; opacity: .65; margin-bottom: .15rem; }
+  .msg.mine .who { display: none; }
+  .tag { font-size: .68rem; text-transform: uppercase; letter-spacing: .04em;
+         opacity: .6; margin-left: .35rem; }
+  .note { align-self: center; color: var(--dim); font-size: .78rem; text-align: center;
+          max-width: 30rem; }
+  .note.rule { width: 100%; border-top: 1px solid var(--line); padding-top: .6rem; }
+
+  .msg .body { unicode-bidi: plaintext; }
+
+  .intro { align-self: stretch; border: 1px solid var(--line); border-radius: 12px;
+           padding: .7rem .85rem; background: var(--theirs); color: var(--dim);
+           font-size: .82rem; }
+  .intro-h { color: var(--fg); font-weight: 600; font-size: .9rem; margin-bottom: .25rem; }
+  .intro-f { margin-top: .4rem; font-size: .75rem; opacity: .8; }
+
+  .waiting { align-self: flex-start; color: var(--dim); font-size: .82rem;
+             display: flex; align-items: baseline; gap: .1rem; }
+  .waiting .dots i { font-style: normal; animation: blink 1.4s infinite both; }
+  .waiting .dots i:nth-child(2) { animation-delay: .2s; }
+  .waiting .dots i:nth-child(3) { animation-delay: .4s; }
+  @keyframes blink { 0%, 80%, 100% { opacity: .2; } 40% { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .waiting .dots i { animation: none; opacity: .6; }
+  }
+
+  pre { margin: .45rem 0 .2rem; background: var(--code-bg); border: 1px solid var(--line);
+        border-radius: 8px; padding: .6rem .7rem; overflow-x: auto; }
+  pre code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .msg.mine pre { background: rgba(0,0,0,.22); border-color: transparent; color: #fff; }
+  code.inline { background: var(--code-bg); border-radius: 4px; padding: .08em .3em;
+                font: .88em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .msg.mine code.inline { background: rgba(0,0,0,.22); }
+  .copy { display: block; margin-left: auto; border: 0; background: transparent;
+          color: var(--dim); font-size: .72rem; cursor: pointer; padding: .1rem .2rem; }
+  .msg.mine .copy { color: rgba(255,255,255,.75); }
+
+  /* ---- composer ---- */
+  footer {
+    flex: 0 0 auto; border-top: 1px solid var(--line); background: var(--bg);
+    padding: .6rem 1rem calc(.6rem + env(safe-area-inset-bottom));
+  }
+  #hint { color: var(--dim); font-size: .78rem; min-height: 1.2em; margin-bottom: .3rem; }
+  .row { display: flex; gap: .5rem; align-items: flex-end; }
+  textarea {
+    flex: 1 1 auto; resize: none; border: 1px solid var(--line); border-radius: 10px;
+    padding: .55rem .7rem; background: var(--theirs); color: var(--fg);
+    /* 16px minimum: anything smaller makes iOS Safari zoom the page on focus. */
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    max-height: 8rem;
+  }
+  textarea:disabled { opacity: .55; }
+  button.send {
+    flex: 0 0 auto; border: 0; border-radius: 10px; padding: .6rem 1rem;
+    background: var(--accent); color: #fff; font-size: 1rem; font-weight: 600;
+    cursor: pointer;
+  }
+  button.send:disabled { opacity: .4; cursor: default; }
+  .foot { margin-top: .45rem; color: var(--dim); font-size: .7rem; display: flex;
+          gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .foot button { border: 0; background: transparent; color: var(--dim);
+                 text-decoration: underline; cursor: pointer; font-size: .7rem; padding: 0; }
+
+  /* ---- gate / error screens ---- */
+  #gate { display: flex; align-items: center; justify-content: center;
+          min-height: 100dvh; padding: 1.5rem; }
+  #gate.off { display: none; }
+  .card { width: 100%; max-width: 24rem; }
+  .card h1 { font-size: 1.3rem; margin: 0 0 .4rem; }
+  .card p { margin: 0 0 1rem; color: var(--dim); }
+  .card label { display: block; font-size: .85rem; margin-bottom: .35rem; }
+  .card input {
+    width: 100%; border: 1px solid var(--line); border-radius: 10px;
+    padding: .6rem .7rem; background: var(--theirs); color: var(--fg);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin-bottom: .7rem;
+  }
+  .card button.go {
+    width: 100%; border: 0; border-radius: 10px; padding: .7rem;
+    background: var(--accent); color: #fff; font-size: 1rem; font-weight: 600; cursor: pointer;
+  }
+  .card button.go:disabled { opacity: .5; cursor: default; }
+  .err { color: #b4453a; font-size: .85rem; min-height: 1.2em; margin-top: .5rem; }
+  .fine { margin-top: 1.2rem; font-size: .75rem; color: var(--dim); }
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div class="card">
+    <h1 id="gate-title">Join the chat</h1>
+    <p id="gate-sub">Pick a name so people know who's talking.</p>
+    <div id="gate-form">
+      <label for="name">Your name</label>
+      <input id="name" type="text" dir="auto" autocomplete="nickname" enterkeyhint="go"
+             maxlength="32" spellcheck="false" placeholder="e.g. Dana">
+      <button class="go" id="join">Join</button>
+    </div>
+    <div class="err" id="gate-err"></div>
+    <p class="fine">This conversation is end-to-end encrypted. The server relays it but can't read it.</p>
+  </div>
+</div>
+
+<div id="app">
+  <header>
+    <span class="brand">agentalk</span>
+    <span id="roster"></span>
+    <button class="iconbtn" id="bell" aria-pressed="false" title="Notify me of new messages">Notify</button>
+    <span id="dot" title="connection"></span>
+  </header>
+  <main id="log" aria-live="polite"></main>
+  <footer>
+    <div id="hint"></div>
+    <div class="row">
+      <textarea id="input" rows="1" dir="auto" placeholder="Type a message…" enterkeyhint="send"></textarea>
+      <button class="send" id="send">Send</button>
+    </div>
+    <div class="foot">
+      <span>Saved only in this browser.</span>
+      <button id="clear">Clear this conversation</button>
+    </div>
+  </footer>
+</div>
+
+<script nonce="{{CSP_NONCE}}">
+(function () {
+  "use strict";
+
+  // Channel coordinates, substituted server-side. Both are hex-validated
+  // before interpolation (see renderChat in src/page/render.ts).
+  //
+  // The encryption key is deliberately NOT here — it lives in the URL fragment
+  // (#k=), which browsers never transmit, so the bridge that served this page
+  // has never seen it.
+  var CHANNEL_ID = "{{CHANNEL_ID}}";
+  var TOKEN = "{{TOKEN}}";
+
+  // Same-origin, always. The page is served by the bridge itself, so relative
+  // paths work and no bridge URL ever has to be interpolated into this script.
+  var API = "/channels/" + CHANNEL_ID;
+
+  var STORE_KEY = "agentalk:" + CHANNEL_ID;
+  var MAX_STORED = 200;
+  var MAX_CHARS = 8000;          // bridge caps the ciphertext blob at 64 KiB
+  var POLL_MS = 55000;           // server long-polls 50s
+  var IDLE_PAUSE_MS = 15 * 60000;
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  var state = {
+    key: null,
+    keyHex: "",
+    name: "",
+    pid: "",
+    cursor: 0,
+    chall: "",
+    paired: false,
+    running: false,
+    paused: false,
+    unread: 0,
+    awaiting: false,      // we sent and haven't heard back yet
+    sentWhileAwaiting: 0,
+    roster: [],
+    topic: "",
+    transcript: [],
+    notify: false,
+    abort: null,
+    backoff: 1000,
+    hiddenSince: 0
+  };
+
+  // ---------------------------------------------------------------- helpers
+
+  // Every piece of peer-controlled text in this file goes through here.
+  // textContent, never innerHTML — names and message bodies are attacker
+  // controlled (the bridge validates name length and nothing else).
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = String(text);
+    return n;
+  }
+
+  function sanitizeName(raw) {
+    return String(raw || "").replace(/[^A-Za-z0-9._-]/g, "").slice(0, 32);
+  }
+
+  // ---8<--- agentalk-crypto begin
+  //
+  // Everything between these markers is pure: it touches no page state and no
+  // globals beyond WebCrypto, so test/manual/phase11.sh can cut it out of the
+  // served page and run it under Node against the real helpers.sh recipe. Keep
+  // it that way — that cross-check is the only automated proof that a browser
+  // and an agent can actually read each other.
+  //
+  // Byte-compatible with src/page/helpers.sh, which every agent peer uses:
+  //   wire  = base64( iv[12] || ciphertext || tag[16] )
+  //   AAD   = utf8("<channel_id>:<sender name>")
+  // WebCrypto appends the tag to the ciphertext already, so its output is
+  // exactly Node's `ct || authTag` — no splicing needed in either direction.
+  // On decrypt, hand it bytes 12.. and it finds the tag itself.
+
+  var enc = new TextEncoder();
+  var dec = new TextDecoder();
+
+  function hexToBytes(hex) {
+    var out = new Uint8Array(hex.length / 2);
+    for (var i = 0; i < out.length; i++) out[i] = parseInt(hex.substr(i * 2, 2), 16);
+    return out;
+  }
+
+  function bytesToHex(bytes) {
+    var s = "";
+    for (var i = 0; i < bytes.length; i++) s += bytes[i].toString(16).padStart(2, "0");
+    return s;
+  }
+
+  // Chunked on purpose. btoa(String.fromCharCode.apply(null, bytes)) spreads
+  // one argument per byte, which blows the call stack in Safari well before
+  // the bridge's 64 KiB blob limit.
+  function bytesToB64(bytes) {
+    var s = "", CHUNK = 0x8000;
+    for (var i = 0; i < bytes.length; i += CHUNK) {
+      s += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(s);
+  }
+
+  function b64ToBytes(b64) {
+    var bin = atob(b64);
+    var out = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  function importChannelKey(hex) {
+    return crypto.subtle.importKey("raw", hexToBytes(hex), { name: "AES-GCM" }, false,
+      ["encrypt", "decrypt"]);
+  }
+
+  // The digest is over the 64-char hex STRING as UTF-8, not over the raw key
+  // bytes. That is what the bootstraps do; hashing the bytes instead would
+  // look correct here and fail every peer's key check.
+  function keyFingerprint(hex) {
+    return crypto.subtle.digest("SHA-256", enc.encode(hex)).then(function (buf) {
+      return bytesToHex(new Uint8Array(buf)).slice(0, 16);
+    });
+  }
+
+  function aesEncrypt(key, aadStr, plaintext) {
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    return crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: iv, additionalData: enc.encode(aadStr), tagLength: 128 },
+      key, enc.encode(plaintext)
+    ).then(function (ct) {
+      var ctb = new Uint8Array(ct);
+      var out = new Uint8Array(12 + ctb.length);
+      out.set(iv, 0);
+      out.set(ctb, 12);
+      return bytesToB64(out);
+    });
+  }
+
+  // Returns null on any failure — wrong key, wrong AAD, or a tampered blob.
+  function aesDecrypt(key, aadStr, blob) {
+    var raw;
+    try { raw = b64ToBytes(blob); } catch (e) { return Promise.resolve(null); }
+    if (raw.length < 29) return Promise.resolve(null);
+    return crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: raw.subarray(0, 12), additionalData: enc.encode(aadStr), tagLength: 128 },
+      key, raw.subarray(12)
+    ).then(function (pt) { return dec.decode(pt); })
+      .catch(function () { return null; });
+  }
+  // ---8<--- agentalk-crypto end
+
+  function encryptEnvelope(obj) {
+    return aesEncrypt(state.key, CHANNEL_ID + ":" + state.name, JSON.stringify(obj));
+  }
+
+  // The sender name comes from the bridge's `from` field, so a bridge that
+  // lied about who sent a message would produce an auth-tag failure rather
+  // than a successful forgery.
+  function decryptEnvelope(blob, fromName) {
+    return aesDecrypt(state.key, CHANNEL_ID + ":" + fromName, blob).then(function (s) {
+      if (s === null) return null;
+      try { return JSON.parse(s); } catch (e) { return null; }
+    });
+  }
+
+  // ---------------------------------------------------------------- storage
+
+  function loadStored() {
+    try {
+      var raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return null;
+      var o = JSON.parse(raw);
+      return (o && o.v === 1) ? o : null;
+    } catch (e) { return null; }
+  }
+
+  // Every write is guarded: Safari in private mode throws on setItem, and a
+  // full quota would otherwise take the whole chat down mid-conversation.
+  function saveStored() {
+    try {
+      localStorage.setItem(STORE_KEY, JSON.stringify({
+        v: 1,
+        name: state.name,
+        transcript: state.transcript.slice(-MAX_STORED)
+      }));
+    } catch (e) { /* transcript persistence is a nicety, never load-bearing */ }
+  }
+
+  function clearStored() {
+    try { localStorage.removeItem(STORE_KEY); } catch (e) {}
+  }
+
+  // ---------------------------------------------------------------- rendering
+
+  // ---8<--- agentalk-render begin
+  //
+  // Extracted and unit-tested by test/manual/phase11.sh against XSS payloads.
+  // Depends only on el() and copyText(), which the harness stubs.
+  //
+  // A deliberately small renderer: fenced blocks and inline spans, nothing
+  // else. Every node is built from textContent, so markup in a message is
+  // shown as characters and can never become markup.
+  function renderBody(text) {
+    var frag = document.createDocumentFragment();
+    var parts = String(text).split("```");
+    for (var i = 0; i < parts.length; i++) {
+      if (i % 2 === 1) {
+        var body = parts[i];
+        var nl = body.indexOf("\n");
+        // Drop a leading language tag ("js", "bash") if there is one.
+        if (nl > -1 && !/\s/.test(body.slice(0, nl))) body = body.slice(nl + 1);
+        var pre = el("pre");
+        pre.dir = "ltr";
+        var code = el("code", null, body.replace(/\n$/, ""));
+        pre.appendChild(code);
+        frag.appendChild(pre);
+        var btn = el("button", "copy", "Copy");
+        btn.addEventListener("click", function (t) {
+          return function () { copyText(t, this); };
+        }(body.replace(/\n$/, "")));
+        frag.appendChild(btn);
+      } else {
+        renderInline(parts[i], frag);
+      }
+    }
+    return frag;
+  }
+
+  function renderInline(text, frag) {
+    var chunks = String(text).split("`");
+    for (var i = 0; i < chunks.length; i++) {
+      if (i % 2 === 1 && chunks[i] !== "") {
+        var ic = el("code", "inline", chunks[i]);
+        ic.dir = "ltr";
+        frag.appendChild(ic);
+      } else {
+        var lines = chunks[i].split("\n");
+        for (var j = 0; j < lines.length; j++) {
+          if (j > 0) frag.appendChild(document.createElement("br"));
+          if (lines[j]) frag.appendChild(document.createTextNode(lines[j]));
+        }
+      }
+    }
+  }
+  // ---8<--- agentalk-render end
+
+  function copyText(text, btn) {
+    var done = function () {
+      btn.textContent = "Copied";
+      setTimeout(function () { btn.textContent = "Copy"; }, 1400);
+    };
+    // clipboard API is secure-context only; keep a path for everything else.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, function () { fallbackCopy(text, done); });
+    } else {
+      fallbackCopy(text, done);
+    }
+  }
+
+  function fallbackCopy(text, done) {
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); done(); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+
+  function atBottom() {
+    var log = $("log");
+    return log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+  }
+
+  function paint(entry, keep) {
+    var log = $("log");
+    var stick = atBottom();
+    var node;
+    if (entry.kind === "note") {
+      node = el("div", "note" + (entry.rule ? " rule" : ""), entry.text);
+    } else {
+      node = el("div", "msg" + (entry.mine ? " mine" : ""));
+      if (!entry.mine) {
+        var who = el("div", "who", entry.from);
+        who.dir = "auto";
+        if (entry.dm) who.appendChild(el("span", "tag", "private to you"));
+        node.appendChild(who);
+      }
+      var body = el("div", "body");
+      // dir="auto" is exactly the rule we want: the browser picks direction
+      // from the first strong character in the text. Without it a Hebrew or
+      // Arabic sentence renders left-to-right and its trailing punctuation
+      // jumps to the wrong end — a "?" landing at the start of the line.
+      body.dir = "auto";
+      body.appendChild(renderBody(entry.text));
+      node.appendChild(body);
+    }
+    // Keep the "Claude is writing" indicator last, so it never ends up
+    // stranded above a message that arrived after it.
+    var w = $("waiting");
+    if (w && w.parentNode === log) log.insertBefore(node, w);
+    else log.appendChild(node);
+    if (stick) log.scrollTop = log.scrollHeight;
+    if (keep !== false) {
+      state.transcript.push(entry);
+      saveStored();
+    }
+  }
+
+  // The standing explainer at the top of the transcript. Deliberately not part
+  // of state.transcript: it is page furniture, re-rendered on every load, not
+  // conversation to be persisted or restored.
+  function paintIntro() {
+    var box = el("div", "intro");
+    box.appendChild(el("div", "intro-h", "You're chatting with Claude, an AI assistant"));
+    var line = state.topic
+      ? "Someone asked it to talk to you about " + state.topic + ". It's writing now."
+      : "Someone asked it to talk to you. It's writing its first message now.";
+    box.appendChild(el("div", null, line));
+    box.appendChild(el("div", "intro-f",
+      "You're in as " + state.name + ". Messages are end-to-end encrypted — the server relays them but can't read them."));
+    $("log").appendChild(box);
+  }
+
+  function showWaiting() {
+    if ($("waiting")) return;
+    var w = el("div", "waiting");
+    w.id = "waiting";
+    w.appendChild(el("span", null, "Claude is writing"));
+    var dots = el("span", "dots");
+    dots.appendChild(el("i", null, "."));
+    dots.appendChild(el("i", null, "."));
+    dots.appendChild(el("i", null, "."));
+    w.appendChild(dots);
+    $("log").appendChild(w);
+    $("log").scrollTop = $("log").scrollHeight;
+  }
+
+  function clearWaiting() {
+    var w = $("waiting");
+    if (w && w.parentNode) w.parentNode.removeChild(w);
+  }
+
+  function setDot(cls, title) {
+    var d = $("dot");
+    d.className = cls;
+    d.title = title;
+  }
+
+  function setHint(text) { $("hint").textContent = text || ""; }
+
+  function paintRoster() {
+    var others = state.roster.filter(function (r) { return r.name !== state.name; });
+    $("roster").textContent = others.length
+      ? others.map(function (r) { return r.name; }).join(", ")
+      : "waiting for someone to join…";
+  }
+
+  // ---------------------------------------------------------------- notifications
+
+  function bump() {
+    if (!document.hidden) return;
+    state.unread++;
+    document.title = "(" + state.unread + ") agentalk";
+    blip();
+    if (state.notify && window.Notification && Notification.permission === "granted") {
+      try { new Notification("agentalk", { body: "New message", tag: "agentalk" }); } catch (e) {}
+    }
+  }
+
+  function clearUnread() {
+    state.unread = 0;
+    document.title = "agentalk";
+  }
+
+  // A synthesised tone rather than an audio file: no asset to serve, nothing
+  // for the CSP to allow, and no extra route on the bridge.
+  function blip() {
+    try {
+      var Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      var ctx = new Ctx();
+      var osc = ctx.createOscillator(), g = ctx.createGain();
+      osc.frequency.value = 660;
+      g.gain.setValueAtTime(0.0001, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.06, ctx.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.22);
+      osc.connect(g); g.connect(ctx.destination);
+      osc.start(); osc.stop(ctx.currentTime + 0.24);
+      setTimeout(function () { try { ctx.close(); } catch (e) {} }, 500);
+    } catch (e) {}
+  }
+
+  // ---------------------------------------------------------------- transport
+
+  function postJSON(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      return r.json().catch(function () { return {}; }).then(function (j) {
+        return { status: r.status, body: j };
+      });
+    });
+  }
+
+  // Mirrors the name-collision retry in bootstrap-joiner.sh.tpl: the bridge
+  // rejects a duplicate name rather than renaming, so the client suffixes.
+  function agentalkJoin(base, fp) {
+    var attempt = 0;
+    function tryOnce(name) {
+      return postJSON(API + "/join", { token: TOKEN, name: name, key_fp: fp })
+        .then(function (r) {
+          if (r.status === 200 && r.body.participant_id) {
+            state.name = name;
+            state.pid = r.body.participant_id;
+            state.cursor = typeof r.body.cursor === "number" ? r.body.cursor : 0;
+            state.roster = r.body.roster || [];
+            return r;
+          }
+          if (r.body.error === "name_taken" && attempt < 7) {
+            attempt++;
+            return tryOnce(base + "-" + attempt);
+          }
+          throw new Error(r.body.error || ("join failed (" + r.status + ")"));
+        });
+    }
+    return tryOnce(base);
+  }
+
+  function agentalkSendEnvelope(obj) {
+    return encryptEnvelope(obj).then(function (blob) {
+      return postJSON(API + "/send", {
+        token: TOKEN, participant_id: state.pid, text: blob
+      });
+    }).then(function (r) {
+      if (r.status === 200) return true;
+      if (r.status === 404 && r.body.hibernating) {
+        return agentalkRejoin().then(function (ok) {
+          return ok ? agentalkSendEnvelope(obj) : false;
+        });
+      }
+      return false;
+    }).catch(function () { return false; });
+  }
+
+  // The bridge drops a room's messages and roster after 30 minutes with nobody
+  // polling, but keeps the id and token valid. A join wakes it. This is the
+  // browser's version of agentalk_rejoin in helpers.sh.
+  function agentalkRejoin() {
+    return keyFingerprint(state.keyHex).then(function (fp) {
+      return agentalkJoin(state.name, fp);
+    }).then(function () {
+      paint({ kind: "note", rule: true, text: "Reconnected." });
+      paintRoster();
+      return sendHello(true);
+    }).then(function () { return true; })
+      .catch(function () { return false; });
+  }
+
+  function sendHello(resumed) {
+    state.chall = bytesToHex(crypto.getRandomValues(new Uint8Array(8)));
+    var env = { hello: state.chall, human: true };
+    if (resumed) env.resumed = true;
+    return agentalkSendEnvelope(env);
+  }
+
+  function pollOnce() {
+    var ctl = new AbortController();
+    state.abort = ctl;
+    var timer = setTimeout(function () { ctl.abort(); }, POLL_MS);
+    var url = API + "/poll?token=" + encodeURIComponent(TOKEN) +
+      "&participant_id=" + encodeURIComponent(state.pid) +
+      "&since=" + state.cursor;
+    return fetch(url, { signal: ctl.signal })
+      .then(function (r) {
+        clearTimeout(timer);
+        return r.json().catch(function () { return {}; })
+          .then(function (j) { return { status: r.status, body: j }; });
+      })
+      .catch(function (e) { clearTimeout(timer); throw e; });
+  }
+
+  function loop() {
+    if (!state.running || state.paused) return;
+    pollOnce().then(function (r) {
+      if (!state.running || state.paused) return;
+      if (r.status === 200) {
+        state.backoff = 1000;
+        setDot("live", "connected");
+        if (typeof r.body.cursor === "number") state.cursor = r.body.cursor;
+        if (r.body.roster) { state.roster = r.body.roster; paintRoster(); }
+        var msgs = r.body.messages || [];
+        var chain = Promise.resolve();
+        msgs.forEach(function (m) {
+          chain = chain.then(function () { return handleMessage(m); });
+        });
+        return chain.then(loop);
+      }
+      if (r.status === 404 && r.body.hibernating) {
+        setDot("warn", "reconnecting");
+        return agentalkRejoin().then(function (ok) {
+          if (ok) return loop();
+          fatal("This conversation has ended.");
+        });
+      }
+      if (r.status === 404) {
+        return fatal("This conversation has ended.");
+      }
+      // Anything else: back off rather than hammer. A bare retry loop here is
+      // what produced 2.1M requests in a day on 2026-08-10.
+      setDot("warn", "reconnecting");
+      return delay(nextBackoff()).then(loop);
+    }).catch(function () {
+      if (!state.running || state.paused) return;
+      setDot("warn", "reconnecting");
+      delay(nextBackoff()).then(loop);
+    });
+  }
+
+  function nextBackoff() {
+    var d = state.backoff;
+    state.backoff = Math.min(state.backoff * 2, 30000);
+    return d;
+  }
+
+  function delay(ms) {
+    return new Promise(function (res) { setTimeout(res, ms); });
+  }
+
+  function fatal(msg) {
+    state.running = false;
+    setDot("off", "closed");
+    $("input").disabled = true;
+    $("send").disabled = true;
+    setHint(msg);
+    paint({ kind: "note", text: msg });
+  }
+
+  // ---------------------------------------------------------------- dispatch
+
+  function handleMessage(m) {
+    if (m.type === "system") {
+      fatal("This conversation has ended.");
+      return Promise.resolve();
+    }
+    if (m.type === "join" || m.type === "leave") {
+      if (m.from && m.from !== state.name) {
+        paint({ kind: "note", text: m.from + (m.type === "join" ? " joined" : " left") });
+      }
+      return Promise.resolve();
+    }
+    if (m.type !== "message" || !m.text) return Promise.resolve();
+    // The bridge echoes our own messages back; they are already on screen.
+    if (m.from === state.name) return Promise.resolve();
+
+    return decryptEnvelope(m.text, m.from).then(function (env) {
+      if (!env) {
+        paint({ kind: "note", text: "A message from " + m.from + " couldn't be decrypted." });
+        return;
+      }
+      // Answer any HELLO. Skipping this leaves later agent joiners unpaired
+      // forever — they wait on a WELCOME that nobody sends.
+      if (env.hello) {
+        agentalkSendEnvelope({ welcome: env.hello, to: m.from });
+        return;
+      }
+      if (env.welcome) {
+        if (env.to === state.name && env.welcome === state.chall && !state.paired) {
+          state.paired = true;
+          setHint("");
+        }
+        return;
+      }
+      if (typeof env.text === "string" && env.text !== "") {
+        // `to` set to someone else means it wasn't meant for us.
+        if (env.to && env.to !== state.name) return;
+        state.awaiting = false;
+        state.sentWhileAwaiting = 0;
+        setHint("");
+        clearWaiting();
+        paint({ from: m.from, text: env.text, mine: false, dm: !!env.to });
+        bump();
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------- sending
+
+  function doSend() {
+    var ta = $("input");
+    var text = ta.value.trim();
+    if (!text || !state.running) return;
+    if (text.length > MAX_CHARS) {
+      setHint("That's too long to send — please split it up.");
+      return;
+    }
+    ta.value = "";
+    ta.style.height = "auto";
+    paint({ from: state.name, text: text, mine: true });
+
+    if (state.awaiting) {
+      state.sentWhileAwaiting++;
+      setHint("Still here — these get read together.");
+    } else {
+      state.awaiting = true;
+      setHint("");
+    }
+    showWaiting();
+
+    agentalkSendEnvelope({ text: text }).then(function (ok) {
+      if (!ok) setHint("That message didn't send. Check your connection.");
+    });
+  }
+
+  // ---------------------------------------------------------------- idle
+
+  // An open tab holds a long-poll waiter, and a parked waiter stops the bridge
+  // from hibernating the room. A tab left open overnight would keep a dead
+  // conversation alive for a day and a half, so give up after a while.
+  function onVisibility() {
+    if (document.hidden) {
+      state.hiddenSince = Date.now();
+      return;
+    }
+    clearUnread();
+    if (state.paused) return;
+    if (state.hiddenSince && Date.now() - state.hiddenSince > IDLE_PAUSE_MS) {
+      pause();
+    }
+  }
+
+  // Tell the room we're going. The bridge turns this into a `leave` message
+  // that reaches the peer's poll within a second, which is the difference
+  // between Claude waiting indefinitely and Claude knowing the conversation is
+  // over. keepalive (not sendBeacon, which forces text/plain) so the request
+  // outlives the page.
+  function sendLeave() {
+    if (!state.pid) return;
+    try {
+      fetch(API + "/leave", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ token: TOKEN, participant_id: state.pid }),
+        keepalive: true
+      });
+    } catch (e) { /* best effort; PEER_STALE is the backstop */ }
+  }
+
+  function pause() {
+    state.paused = true;
+    if (state.abort) { try { state.abort.abort(); } catch (e) {} }
+    // Leaving properly rather than just going silent: after 15 idle minutes
+    // they have effectively gone, and a definite departure is far more useful
+    // to Claude than three minutes of waiting for PEER_STALE to decide.
+    sendLeave();
+    state.pid = "";
+    setDot("off", "paused");
+    setHint("Paused. Tap anywhere to reconnect.");
+    document.addEventListener("click", resumeOnce, { once: true });
+  }
+
+  function resumeOnce() {
+    if (!state.paused) return;
+    state.paused = false;
+    setHint("");
+    setDot("warn", "reconnecting");
+    agentalkRejoin().then(function (ok) {
+      if (ok) { state.running = true; loop(); }
+      else fatal("This conversation has ended.");
+    });
+  }
+
+  // Back from the bfcache. JS was frozen, so the long-poll died without any
+  // error we could catch — without this the tab looks connected and silently
+  // receives nothing for the rest of the session.
+  function restoreFromCache() {
+    if (!state.key || state.paused) return;
+    setDot("warn", "reconnecting");
+    agentalkRejoin().then(function (ok) {
+      if (ok) { state.running = true; loop(); }
+      else fatal("This conversation has ended.");
+    });
+  }
+
+  // ---------------------------------------------------------------- boot
+
+  function showGateError(msg, hideForm) {
+    $("gate-err").textContent = msg;
+    if (hideForm) $("gate-form").style.display = "none";
+  }
+
+  // Everything the page needs beyond the channel id travels in the URL
+  // fragment, which browsers never transmit: the key (k), and optionally the
+  // recipient's name (n) and what the conversation is about (t). Keeping n and
+  // t here rather than in the query string means the bridge never sees who was
+  // invited or what it concerns, and neither ends up in an access log.
+  function readFragmentParams() {
+    var out = {};
+    var hash = (location.hash || "").replace(/^#/, "");
+    hash.split("&").forEach(function (pair) {
+      var i = pair.indexOf("=");
+      if (i < 1) return;
+      var k = pair.slice(0, i);
+      var v = pair.slice(i + 1);
+      try { v = decodeURIComponent(v.replace(/\+/g, " ")); } catch (e) { /* keep raw */ }
+      out[k] = v;
+    });
+    return out;
+  }
+
+  // Short, and stripped of anything that could turn a heading into markup or a
+  // shell surprise downstream. Rendered with textContent regardless.
+  function sanitizeTopic(raw) {
+    return String(raw || "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ").trim().slice(0, 80);
+  }
+
+  function start() {
+    // crypto.subtle is undefined outside a secure context. https and
+    // http://localhost are fine; a self-hoster on http://<lan-ip> is not, and
+    // would otherwise fail confusingly at the first send.
+    if (!window.crypto || !crypto.subtle) {
+      $("gate-title").textContent = "This page needs a secure connection";
+      $("gate-sub").textContent =
+        "Encryption isn't available over plain http. Open this link over https and it will work.";
+      $("gate-form").style.display = "none";
+      return;
+    }
+
+    var params = readFragmentParams();
+    var keyHex = /^[0-9a-fA-F]{64}$/.test(params.k || "") ? params.k.toLowerCase() : null;
+    if (!keyHex) {
+      $("gate-title").textContent = "This link isn't complete";
+      $("gate-sub").textContent =
+        "The part after the # is missing — messaging apps sometimes cut long links in half. " +
+        "Ask whoever sent it to share the whole link again.";
+      $("gate-form").style.display = "none";
+      return;
+    }
+    state.keyHex = keyHex;
+    state.topic = sanitizeTopic(params.t);
+
+    // Tell them what this is before they do anything. Whoever sent the link
+    // said "can you help my AI assistant" in a chat app and then vanished, so
+    // the page has to carry the context itself.
+    if (state.topic) {
+      $("gate-sub").textContent = "Claude, an AI assistant, wants to ask you about " +
+        state.topic + ".";
+    }
+
+    var stored = loadStored();
+    var invited = sanitizeName(params.n);
+
+    // A name in the link means whoever sent it already knows who they're
+    // sending it to, so asking again is pure friction. Without one, ask.
+    if (invited) {
+      joinWith(invited);
+      return;
+    }
+
+    if (stored && stored.name) $("name").value = stored.name;
+    $("join").addEventListener("click", onJoinClick);
+    $("name").addEventListener("keydown", function (e) {
+      if (e.key === "Enter") { e.preventDefault(); onJoinClick(); }
+    });
+  }
+
+  function onJoinClick() {
+    var name = sanitizeName($("name").value);
+    if (!name) {
+      showGateError("Please enter a name using letters, numbers, dots or dashes.");
+      return;
+    }
+    joinWith(name);
+  }
+
+  function joinWith(name) {
+    $("join").disabled = true;
+    showGateError("");
+
+    var stored = loadStored();
+    var resuming = !!(stored && stored.name === name && stored.transcript && stored.transcript.length);
+
+    importChannelKey(state.keyHex).then(function (k) {
+      state.key = k;
+      return keyFingerprint(state.keyHex);
+    }).then(function (fp) {
+      state.fp = fp;
+      return agentalkJoin(name, fp);
+    }).then(function () {
+      // Compare against the first peer that published a fingerprint — the
+      // roster is join-ordered, so that is the channel creator, the party that
+      // minted the key. A mismatch means a truncated or wrong #k=, which would
+      // otherwise fail silently in both directions.
+      var peer = state.roster.filter(function (r) {
+        return r.name !== state.name && r.key_fp;
+      })[0];
+      if (peer && peer.key_fp !== state.fp) {
+        return postJSON(API + "/leave", { token: TOKEN, participant_id: state.pid })
+          .then(function () { throw new Error("key_mismatch"); });
+      }
+    }).then(function () {
+      $("gate").className = "off";
+      $("app").className = "on";
+      paintRoster();
+      setDot("live", "connected");
+
+      if (resuming) {
+        stored.transcript.forEach(function (e) { paint(e, false); });
+        state.transcript = stored.transcript.slice();
+        paint({ kind: "note", rule: true, text: "Reconnected." });
+      } else {
+        // Painted before the first poll even returns. Claude's opener takes a
+        // few seconds to arrive — an empty screen for that long reads as
+        // "broken" or, worse, "I have no idea what I just joined".
+        paintIntro();
+        showWaiting();
+      }
+
+      state.running = true;
+      loop();
+      sendHello(resuming);
+
+      $("input").focus();
+    }).catch(function (e) {
+      $("join").disabled = false;
+      if (e && e.message === "key_mismatch") {
+        showGateError("This link's key doesn't match the conversation. Ask for a fresh link.", true);
+      } else if (e && e.message === "channel_full") {
+        showGateError("This conversation is full.");
+      } else if (e && /channel_or_token_invalid/.test(e.message || "")) {
+        showGateError("This conversation has already ended.", true);
+      } else {
+        showGateError("Couldn't join. Check your connection and try again.");
+      }
+    });
+  }
+
+  // ---------------------------------------------------------------- wiring
+
+  document.addEventListener("DOMContentLoaded", function () {
+    start();
+
+    $("send").addEventListener("click", doSend);
+
+    var ta = $("input");
+    ta.addEventListener("keydown", function (e) {
+      if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); doSend(); }
+    });
+    ta.addEventListener("input", function () {
+      ta.style.height = "auto";
+      ta.style.height = Math.min(ta.scrollHeight, 128) + "px";
+    });
+
+    $("bell").addEventListener("click", function () {
+      // Asked for only behind this tap. The gesture also unlocks audio on iOS,
+      // which refuses to play a sound without one.
+      var btn = this;
+      if (!window.Notification) { state.notify = !state.notify; btn.setAttribute("aria-pressed", String(state.notify)); return; }
+      if (Notification.permission === "granted") {
+        state.notify = !state.notify;
+        btn.setAttribute("aria-pressed", String(state.notify));
+      } else {
+        Notification.requestPermission().then(function (p) {
+          state.notify = (p === "granted");
+          btn.setAttribute("aria-pressed", String(state.notify));
+        });
+      }
+      blip();
+    });
+
+    $("clear").addEventListener("click", function () {
+      clearStored();
+      state.transcript = [];
+      $("log").textContent = "";
+      paint({ kind: "note", text: "Cleared from this browser." }, false);
+    });
+
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", clearUnread);
+
+    // pagehide is the one that actually fires on mobile — unload and
+    // beforeunload are unreliable there. `persisted` means the page went into
+    // the bfcache and may come straight back, so it is not a departure.
+    window.addEventListener("pagehide", function (e) {
+      if (e.persisted) return;
+      sendLeave();
+    });
+    window.addEventListener("pageshow", function (e) {
+      if (e.persisted) restoreFromCache();
+    });
+  });
+})();
+</script>
+</body>
+</html>
