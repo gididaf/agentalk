@@ -26,7 +26,7 @@ The TypeScript in `src/bridge/` is comparatively boring HTTP plumbing — it UA-
 ## Stack
 
 - **Runtime:** Node 22 + Hono.
-- **Static site:** Astro 5 in `site/` with `@astrojs/sitemap`. Build output served by Hono from `dist/site/` to non-LLM UAs.
+- **Static site:** Astro 5 in `site/`. Build output served by Hono from `dist/site/` to non-LLM UAs. (`@astrojs/sitemap` is still in `site/package.json` but is no longer wired into `astro.config.mjs` — it went with the marketing site on 2026-08-10. Vestigial, not load-bearing.)
 - **Crypto:** AES-256-GCM (Node's `crypto` module), key transported in URL fragment (`#k=…`), bridge never sees it. AAD = `channel_id:sender_name`.
 - **Transport:** HTTPS + JSON. Long-poll up to 50 s (Cloudflare's origin timeout is 100 s).
 - **Deploy:** Caddy + Let's Encrypt + systemd on Ubuntu. See `deploy/`.
@@ -62,7 +62,17 @@ Manual QA, one script per build phase. **Re-run the relevant one after any SDK/l
 ./test/manual/session-isolation.sh  # two sessions from one cwd must not cross-talk
 ```
 
-These are curl-driven, not real-Claude. **They cannot catch SDK phrasing regressions** — those need an actual `claude` session reading the page.
+Phases 1-8, 10, 11 and 13 are curl-driven. Phases 9 and 12 actually *execute* `loop.sh` against a live bridge, because they test runtime behaviour (sleep/wake, burst buffering) that no amount of source-grepping can confirm.
+
+One script drives a real model:
+
+```bash
+RUN_REAL_CLAUDE=1 ./test/manual/phase14-real-claude.sh  # link-type decision, via claude -p
+```
+
+It spends real tokens, so it is opt-in behind that env var. It checks the decisions the SDK's *prose* is supposed to produce: agent link vs human link, and — the one worth having — that Claude does **not** invent a name when the user never gave one.
+
+Everything else about phrasing still needs a human in the loop. A script can check that Claude picked the right file and appended the right params; it cannot check whether the opener it writes to a stranger is actually jargon-free, or whether it stays that way by the third message.
 
 ## Gotchas that burned time, please don't re-burn
 
@@ -123,7 +133,7 @@ When removing files under `src/` or `site/`, rsync with `--delete` — stale sou
 
 ```
 src/bridge/index.ts          Hono routes, UA sniffing, rate-limit wiring
-src/bridge/channels.ts       In-memory channel state, eviction, long-poll waiters
+src/bridge/channels.ts       In-memory channel state, hibernate/resume, eviction, long-poll waiters
 src/bridge/rate-limit.ts     Per-IP token bucket
 src/bridge/metrics.ts        Prometheus /metrics
 src/page/render.ts           Markdown/shell template substitution + HEX validation
@@ -152,3 +162,7 @@ deploy/{Caddyfile,install.sh,agentalk.service,env.example}
 - Read the existing `src/page/initiator.md` and `src/page/joiner.md` end to end. They are the spec.
 - Talk to the live bridge at `https://agentalk.dev/health` and `https://agentalk.dev/llms.txt` to see current production state.
 - The original 8-phase plan + 8c-fix design notes live in the user's `~/.claude/plans/` directory and in auto-memory.
+
+## Last Synced Commit
+
+`75c70da660d5344f4197c723a36a3db61ad667ba` — 2026-08-13
