@@ -67,18 +67,40 @@ grep -qF "$CHANNEL_ID" "$PAGE" && ok "channel id substituted" || bad "channel id
 grep -qF "$TOKEN" "$PAGE" && ok "token substituted" || bad "token missing"
 grep -q '{{' "$PAGE" && bad "unsubstituted {{…}} placeholder left in the page" || ok "no leftover placeholders"
 
-step "3. self-contained — no external origins"
-# Any absolute URL to another host would be blocked by the CSP anyway, but it
-# would also mean the page stopped being self-contained.
-if grep -oE '(src|href)="https?://[^"]+"' "$PAGE" | grep -q .; then
-  bad "page references an external origin:"
-  grep -oE '(src|href)="https?://[^"]+"' "$PAGE" | sed 's/^/      /'
+step "3. self-contained — and anything injected en route cannot run"
+# Two different properties, and against production they give different answers.
+# What WE serve is fully self-contained. But a CDN in front of the origin can
+# rewrite HTML: Cloudflare's automatic Web Analytics injects a <script src=…>
+# into the chat page. So assert the property that actually protects the user —
+# nothing external can EXECUTE — rather than assuming the bytes arrive untouched.
+EXTERNAL=$(grep -oE '(src|href)="https?://[^"]+"' "$PAGE" || true)
+if [ -z "$EXTERNAL" ]; then
+  ok "no external src= or href= (page arrived untouched)"
 else
-  ok "no external src= or href="
+  echo "$EXTERNAL" | sed 's/^/      injected: /'
+  CSPHDR=$(curl -sI -H "User-Agent: $CHROME_UA" -H "Accept: $BROWSER_ACCEPT" \
+    "$BRIDGE/c/$CHANNEL_ID?token=$TOKEN" \
+    | awk -F': ' 'tolower($1)=="content-security-policy"{print $2}' | tr -d '\r\n')
+  # An external script can only run if the CSP allows its host, or allows
+  # nonces AND it carries one. Cloudflare copies nonces, which is exactly why
+  # this page pins its own script by hash and permits no nonce at all.
+  BADHOST=0
+  for host in $(echo "$EXTERNAL" | grep -oE 'https?://[^/"]+' | sed 's#https\?://##' | sort -u); do
+    printf '%s' "$CSPHDR" | grep -qF "$host" && BADHOST=1
+  done
+  if [ "$BADHOST" = "1" ]; then
+    bad "an injected external host is allow-listed by the CSP"
+  elif printf '%s' "$CSPHDR" | grep -q 'nonce-'; then
+    bad "CSP permits nonces, and an intermediary can copy one onto its injection"
+  else
+    ok "an intermediary injected a script, but the CSP cannot execute it"
+  fi
 fi
-grep -qE '<(script|link)[^>]+(src|href)=' "$PAGE" \
-  && bad "page loads an external script or stylesheet" \
-  || ok "all CSS and JS is inline"
+
+# Our own assets must still all be inline.
+grep -qE '<link[^>]+href="https?://' "$PAGE" \
+  && bad "page loads an external stylesheet" \
+  || ok "all CSS is inline"
 
 step "4. XSS discipline"
 # Match real property access (`.innerHTML`), not the word — the page's own
