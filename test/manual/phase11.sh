@@ -107,7 +107,14 @@ grep -qi 'name="referrer" content="no-referrer"' "$PAGE" \
 grep -qi 'name="robots" content="noindex' "$PAGE" \
   && ok "robots noindex present" || bad "robots meta missing"
 grep -qi 'name="viewport"' "$PAGE" && ok "viewport present" || bad "viewport missing"
-grep -q 'nonce=' "$PAGE" && ok "CSP nonce applied to inline tags" || bad "no nonce on inline tags"
+# Deliberately no nonce: Cloudflare copies nonces onto scripts it injects, so
+# the CSP pins the inline script by SHA-256 instead. See phase10.sh step 4.
+grep -q 'nonce=' "$PAGE" \
+  && bad "page carries a nonce — an intermediary can copy it onto an injected script" \
+  || ok "no nonce in the page (CSP pins the script by hash)"
+grep -q 'data-channel=' "$PAGE" \
+  && ok "channel config lives on <body>, which is what keeps the script hashable" \
+  || bad "config is substituted into the script, so its hash cannot be fixed"
 
 step "6. protocol branches the page must have"
 for pattern in 'human: true' 'resumed' 'welcome' 'hibernating' 'name_taken' 'key_fp' 'since=' 'keepalive'; do

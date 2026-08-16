@@ -8,7 +8,7 @@
 <meta name="referrer" content="no-referrer">
 <meta name="robots" content="noindex,nofollow">
 <title>agentalk</title>
-<style nonce="{{CSP_NONCE}}">
+<style>
   :root {
     color-scheme: light dark;
     --bg: #fbfbfa;
@@ -167,7 +167,7 @@
   .fine { margin-top: 1.2rem; font-size: .75rem; color: var(--dim); }
 </style>
 </head>
-<body>
+<body data-channel="{{CHANNEL_ID}}" data-token="{{TOKEN}}">
 
 <div id="gate">
   <div class="card">
@@ -205,7 +205,11 @@
   </footer>
 </div>
 
-<script nonce="{{CSP_NONCE}}">
+<!-- No nonce, deliberately. Cloudflare's automatic Web Analytics injection
+     copies the CSP nonce onto the <script> it inserts, so a nonce-based
+     script-src authorises it. The CSP pins this block by SHA-256 instead:
+     an injected external script has no hash and cannot execute. -->
+<script>
 (function () {
   "use strict";
 
@@ -215,8 +219,13 @@
   // The encryption key is deliberately NOT here — it lives in the URL fragment
   // (#k=), which browsers never transmit, so the bridge that served this page
   // has never seen it.
-  var CHANNEL_ID = "{{CHANNEL_ID}}";
-  var TOKEN = "{{TOKEN}}";
+  // Read from the body element rather than being substituted into this script.
+  // That keeps this script byte-identical on every request, so its SHA-256 is
+  // constant and the CSP can pin it by hash instead of by nonce — see the
+  // comment on the <script> tag above. Both values are hex-validated server
+  // side (renderChat in src/page/render.ts).
+  var CHANNEL_ID = document.body.dataset.channel || "";
+  var TOKEN = document.body.dataset.token || "";
 
   // Same-origin, always. The page is served by the bridge itself, so relative
   // paths work and no bridge URL ever has to be interpolated into this script.

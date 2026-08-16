@@ -50,6 +50,8 @@ need node
 
 # header value for a given name, lowercased, CR stripped
 hdr() { awk -v k="$1" -F': ' 'tolower($1)==k{print tolower($2)}' | tr -d '\r\n'; }
+# Same, but preserving case — a base64 CSP hash is case-sensitive.
+hdrRaw() { awk -v k="$1" -F': ' 'tolower($1)==k{print $2}' | tr -d '\r\n'; }
 
 step "0. bridge reachable"
 curl -fsS "$BRIDGE/health" >/dev/null || { bad "bridge not running at $BRIDGE"; exit 1; }
@@ -140,16 +142,41 @@ rp=$(curl -sI -H "User-Agent: $CHROME_UA" -H "Accept: $BROWSER_ACCEPT" "$BRIDGE$
   && ok "referrer-policy: no-referrer (?token= must not leak via Referer)" \
   || bad "referrer-policy is '$rp'"
 
-csp=$(curl -sI -H "User-Agent: $CHROME_UA" -H "Accept: $BROWSER_ACCEPT" "$BRIDGE$JOIN_PATH" | hdr content-security-policy)
-[[ "$csp" == *"nonce-"* && "$csp" != *"unsafe-inline"* ]] \
-  && ok "CSP present with a nonce and no unsafe-inline" \
-  || bad "CSP is '$csp'"
+csp=$(curl -sI -H "User-Agent: $CHROME_UA" -H "Accept: $BROWSER_ACCEPT" "$BRIDGE$JOIN_PATH" | hdrRaw content-security-policy)
+# HASH, not nonce, and the difference is load-bearing. Cloudflare's automatic
+# Web Analytics injection reads the response's CSP nonce and copies it onto the
+# <script> it injects — so a nonce-based script-src ends up authorising a
+# third-party script inside the one page that holds decrypted messages and can
+# read the E2E key out of location.hash. Observed live on agentalk.dev
+# 2026-08-16. A hash cannot be copied, and an injected external script has no
+# hash at all.
+[[ "$csp" == *"sha256-"* ]] \
+  && ok "CSP pins the inline script by hash" \
+  || bad "CSP has no sha256- hash: '$csp'"
+[[ "$csp" != *"nonce-"* ]] \
+  && ok "CSP uses no nonce (an intermediary can copy one)" \
+  || bad "CSP still uses a nonce: '$csp'"
+[[ "$csp" != *"unsafe-inline"* ]] \
+  && ok "CSP has no unsafe-inline" \
+  || bad "CSP allows unsafe-inline: '$csp'"
+[[ "$csp" == *"default-src 'none'"* ]] \
+  && ok "CSP defaults to none" \
+  || bad "CSP does not default to none: '$csp'"
 
-n1=$(curl -sS -H "User-Agent: $CHROME_UA" -H "Accept: $BROWSER_ACCEPT" "$BRIDGE$JOIN_PATH" | grep -o 'nonce="[^"]*"' | head -1)
-n2=$(curl -sS -H "User-Agent: $CHROME_UA" -H "Accept: $BROWSER_ACCEPT" "$BRIDGE$JOIN_PATH" | grep -o 'nonce="[^"]*"' | head -1)
-[ -n "$n1" ] && [ "$n1" != "$n2" ] \
-  && ok "nonce is per-request (differs across two fetches)" \
-  || bad "nonce did not change between requests: '$n1' vs '$n2'"
+# The hash must match the bytes actually served, or the page silently will not run.
+curl -sS -H "User-Agent: $CHROME_UA" -H "Accept: $BROWSER_ACCEPT" "$BRIDGE$JOIN_PATH" > /tmp/agentalk-p10-page.html
+REALHASH=$(node -e '
+  const fs=require("fs"),c=require("crypto");
+  const h=fs.readFileSync("/tmp/agentalk-p10-page.html","utf8");
+  const m=/<script>([\s\S]*?)<\/script>/.exec(h);
+  process.stdout.write(m ? "sha256-"+c.createHash("sha256").update(m[1],"utf8").digest("base64") : "NOSCRIPT");')
+[[ "$csp" == *"$REALHASH"* ]] \
+  && ok "the CSP hash matches the script actually served" \
+  || bad "CSP hash does not match served script ($REALHASH)"
+
+grep -q 'nonce=' /tmp/agentalk-p10-page.html \
+  && bad "the served page still carries a nonce attribute" \
+  || ok "no nonce attributes in the page"
 
 # ---------------------------------------------------------------------------
 step "5. malformed link with a browser UA"

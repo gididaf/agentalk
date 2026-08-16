@@ -4,9 +4,9 @@ import type { Context } from "hono";
 import { ChannelStore } from "./channels.js";
 import { RateLimiter, loadConfig as loadRateLimitConfig } from "./rate-limit.js";
 import { renderMetrics } from "./metrics.js";
-import { randomBytes } from "node:crypto";
 import {
   loadSiteAsset,
+  chatCsp,
   renderChat,
   renderChatLinkError,
   renderHelpersScript,
@@ -128,8 +128,7 @@ const joinerHandler = (c: Context) => {
     });
   }
   if (shouldServeChatUi(ua, accept)) {
-    const nonce = randomBytes(16).toString("base64");
-    const page = renderChat(id, token, nonce);
+    const page = renderChat(id, token);
     // renderChat returns null when the id or token is not hex. Both are
     // interpolated into the page body, so this is the same load-bearing
     // validation that guards the bootstrap route — see render.ts.
@@ -140,6 +139,7 @@ const joinerHandler = (c: Context) => {
         vary: joinerVary,
       });
     }
+    const csp = chatCsp();
     return c.body(page, 200, {
       "content-type": "text/html; charset=utf-8",
       // Never `public` like the landing page: this body embeds the channel
@@ -149,15 +149,20 @@ const joinerHandler = (c: Context) => {
       // The URL carries ?token=, so it must never ride along in a Referer.
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
-      // The page renders peer-controlled names and message bodies. Those all
-      // go through textContent, so this is the second line of defence, not the
-      // first — but a nonce means even a successful injection cannot execute.
-      // connect-src 'self' is what lets it reach /channels/*; img-src 'none'
-      // and the absent default-src fallback keep it from phoning anywhere else.
+      // The page renders peer-controlled names and message bodies. Those all go
+      // through textContent, so this is the second line of defence, not the
+      // first. connect-src 'self' is what lets it reach /channels/*; img-src
+      // 'none' and default-src 'none' keep it from phoning anywhere else.
+      //
+      // Pinned by HASH, not nonce. Cloudflare's automatic Web Analytics
+      // injection copies the response's CSP nonce onto the <script> it inserts,
+      // so a nonce-based policy authorises a third-party script inside the one
+      // page that holds decrypted messages and can read the key from
+      // location.hash. It cannot forge a hash. See chatCsp() in render.ts.
       "content-security-policy": [
         "default-src 'none'",
-        `script-src 'nonce-${nonce}'`,
-        `style-src 'nonce-${nonce}'`,
+        `script-src '${csp.script}'`,
+        `style-src '${csp.style}'`,
         "connect-src 'self'",
         "img-src 'none'",
         "base-uri 'none'",

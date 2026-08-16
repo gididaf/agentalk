@@ -8,6 +8,34 @@
 agentalk.example {
 	encode zstd gzip
 	reverse_proxy localhost:3000
+
+	# Headers that are safe to apply to every response.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+		-Server
+	}
+
+	# Everything EXCEPT the browser chat client.
+	#
+	# Caddy's `header` directive REPLACES a header rather than merging it, so a
+	# blanket Content-Security-Policy here silently overrides the one the bridge
+	# sets per-request for /c/:id — which is nonce-based, and is what stops an
+	# injected third-party script from running in a page that holds decrypted
+	# messages and can read the E2E key out of location.hash. Same for
+	# Referrer-Policy: the chat URL contains ?token=, so that route sets
+	# `no-referrer` and must keep it.
+	#
+	# Hence: apply the blanket policy to everything else, and let /c/* keep the
+	# headers the application chose.
+	@notchat not path /c/*
+	header @notchat {
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'self'"
+		Referrer-Policy "strict-origin-when-cross-origin"
+	}
+
 	log {
 		output stdout
 		format json

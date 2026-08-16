@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -141,13 +142,47 @@ export function renderInitiatorBootstrap(bridgeUrl: string): string {
 // markdown but is a reflected-XSS primitive inside HTML. The page is served
 // same-origin by this very bridge, so it uses relative URLs and the whole
 // class of bug disappears.
-export function renderChat(channelId: string, token: string, nonce: string): string | null {
+export function renderChat(channelId: string, token: string): string | null {
   if (!HEX_RE.test(channelId) || !HEX_RE.test(token)) return null;
   return fill(load("chat.html"), {
     CHANNEL_ID: channelId,
     TOKEN: token,
-    CSP_NONCE: nonce,
   });
+}
+
+// SHA-256 of the page's inline <script> and <style> bodies, for a hash-based CSP.
+//
+// A nonce would be the obvious choice and is the wrong one here: Cloudflare's
+// automatic Web Analytics injection reads the nonce out of the response and
+// copies it onto the <script> tag it inserts, so a nonce-based script-src ends
+// up authorising exactly the third-party script we need to keep out of a page
+// holding decrypted messages and the E2E key. A hash cannot be copied — an
+// injected external script has no hash at all, so it simply does not run.
+//
+// This is why the config lives on <body data-…> instead of being substituted
+// into the script: the script body must be byte-identical every request for a
+// fixed hash to hold. Computed once, at first use.
+let chatCspHashes: { script: string; style: string } | null = null;
+
+function sha256b64(s: string): string {
+  return createHash("sha256").update(s, "utf8").digest("base64");
+}
+
+export function chatCsp(): { script: string; style: string } {
+  if (chatCspHashes) return chatCspHashes;
+  const html = load("chat.html");
+  const script = /<script>([\s\S]*?)<\/script>/.exec(html);
+  const style = /<style>([\s\S]*?)<\/style>/.exec(html);
+  if (!script || !style) {
+    throw new Error(
+      "chat.html: expected one bare <script> and one bare <style> block to hash for the CSP",
+    );
+  }
+  chatCspHashes = {
+    script: `sha256-${sha256b64(script[1])}`,
+    style: `sha256-${sha256b64(style[1])}`,
+  };
+  return chatCspHashes;
 }
 
 // Shown when someone opens a /c/... link in a browser but the id or token is
