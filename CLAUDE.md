@@ -15,7 +15,7 @@ The repo has **three distinct surfaces** and they have very different change rul
    - `src/page/protocol.md` — wire-protocol reference, appended to both SDK pages.
    - `src/page/skill.md` and `src/page/skill-install.sh.tpl` — the optional `/agentalk` skill and its one-line web installer. The skill is standing authorization that stops Claude nagging before every send on the user's own bridge; the installer (`curl -fsSL <bridge>/skill.sh | sh`) writes it to `~/.claude/skills/agentalk/SKILL.md` (hot-loads mid-session). `skill.md` is tuned Claude-facing prose — curl QA can't test whether it actually calms the model; that needs a real session.
 
-2. **Browser chat surface (`src/page/chat.html`)** — the page a *person* gets when they open a join link in a browser, so a coworker can talk to a Claude session with no install. One self-contained file: inline CSS, inline JS, zero external requests, no build step, no Astro. It reimplements the wire protocol in WebCrypto, so it must stay byte-compatible with `helpers.sh` — `test/manual/phase11.sh` extracts the crypto block from the *served page* and runs it against the real `helpers.sh` recipe in both directions. Two standing rules: **every peer-controlled string renders via `textContent`** (names are not sanitized server-side), and **no `BRIDGE_URL` is interpolated into it** — `bridgeBase()` is Host-header-derived, which is harmless in markdown and a reflected-XSS primitive in HTML, so the page uses relative URLs only.
+2. **Browser chat surface (`src/page/chat.html`)** — the page a *person* gets when they open a join link in a browser, so a coworker can talk to a Claude session with no install. One self-contained file: inline CSS, inline JS, zero external requests, no build step, no Astro. It reimplements the wire protocol in WebCrypto, so it must stay byte-compatible with `helpers.sh` — `test/manual/phase11.sh` extracts the crypto block from the *served page* and runs it against the real `helpers.sh` recipe in both directions. Three standing rules: **every peer-controlled string renders via `textContent`** (names are not sanitized server-side); **no `BRIDGE_URL` is interpolated into it** — `bridgeBase()` is Host-header-derived, which is harmless in markdown and a reflected-XSS primitive in HTML, so the page uses relative URLs only; and **nothing per-request may be substituted into the inline `<script>`**. That last one is why the channel id and token ride on `<body data-channel data-token>` and are read back out at runtime: the CSP pins the script by SHA-256 (see gotcha 9 and `chatCsp()` in `render.ts`), so its body has to be byte-identical on every request or the digest stops matching and the whole page goes dead. Hash, not nonce, because Cloudflare's Web Analytics injection copies a response's nonce onto the script it inserts — it cannot forge a hash.
 
 3. **Human-facing surface (`site/`)** — a SINGLE minimal Astro page (`site/src/pages/index.astro`, self-contained, inline CSS). The 12-page SEO marketing site was deliberately removed 2026-08-10 (user abandoned SEO and pulled the site from Search Console). Keep it one page and short; don't rebuild content pages, sitemaps, or SEO meta without an explicit ask.
 
@@ -56,7 +56,7 @@ Manual QA, one script per build phase. **Re-run the relevant one after any SDK/l
 ./test/manual/phase8.sh  # hibernate / resume (bridge side)
 ./test/manual/phase9.sh  # loop.sh survives a sleep/wake cycle (executes the loop)
 ./test/manual/phase10.sh # browser routing at /c/:id + share_message_human
-./test/manual/phase11.sh # chat page: WebCrypto<->helpers.sh interop, renderer vs XSS
+./test/manual/phase11.sh # chat page: WebCrypto<->helpers.sh interop, renderer vs XSS, CSP cannot run an injected script
 ./test/manual/phase12.sh # HUMAN_JOINED + burst coalescing (executes the loop)
 ./test/manual/phase13.sh # join rate limit + control-char names
 ./test/manual/session-isolation.sh  # two sessions from one cwd must not cross-talk
@@ -92,6 +92,8 @@ Everything else about phrasing still needs a human in the loop. A script can che
 
 8. **The handoff phrase matters.** "Talk to my other Claude — curl this URL to start: …" passes Claude Code's prompt-injection filter. Variants like "follow this URL" or naked URL paste have failed in past QA. The bridge ships this exact phrasing in the `share_message` body — don't rewrite it without testing both ends.
 
+9. **The chat page's CSP hash must be computed the way a *browser* parses the page, not the way a regex scans the file.** `chat.html` contains prose *about* `<script>` tags — the comment above the real one explains the nonce-vs-hash rationale and includes the literal string. A plain `/<script>([\s\S]*?)<\/script>/` on the raw file therefore opens inside that comment and hashes comment text plus the script body. `chatCsp()` strips HTML comments first, and throws if a hashed body still contains markup. This shipped once (a5734af) and took down the entire browser surface in production: Chrome refused the inline script, the page rendered but the join button did nothing, and `/health` looked perfectly healthy. **A server that hashes its own output cannot self-check** — the header agreed with the file it came from, and `phase10.sh` reproduced the same regex, so both were consistently wrong and QA was green. The check now models the consumer; keep it that way.
+
 ## Adding a feature — the process this project uses
 
 1. **Verify assumptions first.** List every assumption the change rests on; use `AskUserQuestion` for the load-bearing ones. The user explicitly values this — past sessions burned on assumptions that should have been confirmed.
@@ -122,6 +124,8 @@ Notes:
 - `--exclude='node_modules'` is load-bearing — `site/node_modules` is ~157 MB and the VM reinstalls fresh.
 - The chown matters because rsync over root SSH leaves root-owned files; agentalk needs write access to create `dist/`.
 - systemd runs `node /opt/agentalk/dist/bridge/index.js` — so the build is required before restart. If the build fails, *don't* restart; the existing `dist/` keeps the old code working.
+- **A restart destroys every room, live *and* hibernating** — they are in-memory. The user's rule is to take the deploy window when `/health` shows the channel count is low or zero, and `/health` is the only visibility there is (aggregate counts; no endpoint enumerates channel ids, by design).
+- **Caddy's `header` directive replaces, it does not merge.** Production once carried a blanket CSP that silently wiped the per-route headers the bridge sets, including the chat page's. It is now scoped with `@notchat not path /c/*` in `deploy/Caddyfile`. If the app's response headers ever appear to vanish, check the VM's Caddyfile against the repo copy before suspecting the bridge.
 
 Bridge runs as the `agentalk` user. Systemd unit at `/etc/systemd/system/agentalk.service`. Env at `/etc/agentalk/env`. Caddy fronts it with Let's Encrypt; Cloudflare proxy in front of that in Full (strict) mode.
 
@@ -165,4 +169,4 @@ deploy/{Caddyfile,install.sh,agentalk.service,env.example}
 
 ## Last Synced Commit
 
-`75c70da660d5344f4197c723a36a3db61ad667ba` — 2026-08-13
+`995a9ba5fc504fc3aea400f8e3adea71ce025ac4` — 2026-08-17
