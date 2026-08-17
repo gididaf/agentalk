@@ -170,13 +170,39 @@ function sha256b64(s: string): string {
 
 export function chatCsp(): { script: string; style: string } {
   if (chatCspHashes) return chatCspHashes;
-  const html = load("chat.html");
+  // Strip HTML comments before locating the blocks, so this matches what a
+  // browser hashes rather than what a regex happens to find first. chat.html's
+  // own comments discuss <script> tags — the CSP rationale directly above the
+  // real one is written in prose that contains the literal string — so a naive
+  // match on the raw file opens inside that comment and runs to the *real*
+  // </script>, hashing several lines of comment plus the script body.
+  //
+  // That failure is invisible from the server: the header agreed with the file
+  // it was derived from, and the QA check reproduced the same mistake, so both
+  // sides were consistently wrong. Only a browser disagreed — Chrome refused
+  // the inline script and the whole chat client went dead, with the join button
+  // as the visible symptom. Shipped in a5734af, caught in production
+  // 2026-08-17.
+  const html = load("chat.html").replace(/<!--[\s\S]*?-->/g, "");
   const script = /<script>([\s\S]*?)<\/script>/.exec(html);
   const style = /<style>([\s\S]*?)<\/style>/.exec(html);
   if (!script || !style) {
     throw new Error(
       "chat.html: expected one bare <script> and one bare <style> block to hash for the CSP",
     );
+  }
+  // A hashed body that still carries markup means the match began somewhere
+  // other than the tag we meant — the exact shape of the bug above. Fail the
+  // request instead of serving a policy that blocks the page it protects.
+  for (const [what, body] of [
+    ["script", script[1]],
+    ["style", style[1]],
+  ] as const) {
+    if (body.includes("-->") || body.includes(`</${what}`)) {
+      throw new Error(
+        `chat.html: hashed <${what}> body contains markup — the CSP hash would not match what a browser computes`,
+      );
+    }
   }
   chatCspHashes = {
     script: `sha256-${sha256b64(script[1])}`,

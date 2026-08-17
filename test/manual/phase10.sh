@@ -165,11 +165,16 @@ csp=$(curl -sI -H "User-Agent: $CHROME_UA" -H "Accept: $BROWSER_ACCEPT" "$BRIDGE
 
 # The hash must match the bytes actually served, or the page silently will not run.
 curl -sS -H "User-Agent: $CHROME_UA" -H "Accept: $BROWSER_ACCEPT" "$BRIDGE$JOIN_PATH" > /tmp/agentalk-p10-page.html
+# Comments are stripped first, exactly as the browser effectively does: the
+# page comments *about* <script> tags, so matching the raw text starts inside a
+# comment and hashes prose plus the script. This check used to make that same
+# mistake, which is how a policy that blocked its own page passed QA and shipped.
 REALHASH=$(node -e '
   const fs=require("fs"),c=require("crypto");
-  const h=fs.readFileSync("/tmp/agentalk-p10-page.html","utf8");
+  const h=fs.readFileSync("/tmp/agentalk-p10-page.html","utf8").replace(/<!--[\s\S]*?-->/g,"");
   const m=/<script>([\s\S]*?)<\/script>/.exec(h);
-  process.stdout.write(m ? "sha256-"+c.createHash("sha256").update(m[1],"utf8").digest("base64") : "NOSCRIPT");')
+  if (m && m[1].includes("-->")) { process.stdout.write("MARKUP-IN-BODY"); }
+  else process.stdout.write(m ? "sha256-"+c.createHash("sha256").update(m[1],"utf8").digest("base64") : "NOSCRIPT");')
 [[ "$csp" == *"$REALHASH"* ]] \
   && ok "the CSP hash matches the script actually served" \
   || bad "CSP hash does not match served script ($REALHASH)"
