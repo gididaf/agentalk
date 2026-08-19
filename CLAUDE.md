@@ -59,12 +59,15 @@ Manual QA, one script per build phase. **Re-run the relevant one after any SDK/l
 ./test/manual/phase11.sh # chat page: WebCrypto<->helpers.sh interop, renderer vs XSS, CSP cannot run an injected script
 ./test/manual/phase12.sh # HUMAN_JOINED + burst coalescing (executes the loop)
 ./test/manual/phase13.sh # join rate limit + control-char names
+./test/manual/phase15.sh # loop guards, rc propagation, key= matrix, KEY_MISMATCH/UNVERIFIED, PEER_STALE
 ./test/manual/session-isolation.sh  # two sessions from one cwd must not cross-talk
 ```
 
 Phases 1-8, 10, 11 and 13 are curl-driven. Phases 9 and 12 actually *execute* `loop.sh` against a live bridge, because they test runtime behaviour (sleep/wake, burst buffering) that no amount of source-grepping can confirm.
 
-**Known gap (2026-08-19):** no phase script covers the guards added in `d64e563` — `FATAL loop_not_sourced`, `FATAL loop_env_incomplete`, `SYSTEM hello_send_failed rc=<n>`, or the `KEY_MISMATCH` / `KEY_UNVERIFIED` roster events and the `key=verified|partial|unverified` bootstrap statuses. They were verified by hand (executing `loop.sh` with `bash` to trip the guard, and joining a channel against a peer publishing no `key_fp`), but nothing re-checks them. Given this repo has already had six of seven gates rot silently, treat that as a debt to pay before the next change in this area, not as coverage.
+`phase15.sh` covers the guards added in `d64e563` — `FATAL loop_not_sourced` / `loop_env_incomplete`, the non-zero rc on `hello_send_failed`, the `key=verified|partial|unverified` matrix, the runtime `KEY_MISMATCH` / `KEY_UNVERIFIED` events, and `PEER_STALE` naming one peer with a real number. It runs the loop under **zsh** where available, because two of those bugs are zsh-only and a bash-only test cannot see them.
+
+It was **mutation-tested**: run against the pre-fix sources (`git checkout c85e05b -- src/page/`) it fails 25 of 38 checks, with at least one failure per bug family. Do that again after changing it — an always-green gate is exactly how six of seven gates rotted here before. That exercise also caught a defect in the test itself: two loop invocations had no `timeout`, so a regression that removed the early exit made the script *hang* rather than fail, which reads as a slow machine rather than a broken build. **Every loop invocation in a QA script must be bounded.**
 
 One script drives a real model:
 
