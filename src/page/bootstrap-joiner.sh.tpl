@@ -92,21 +92,59 @@ AGENTALK_OTHERS=$(printf '%s' "$AGENTALK_JOIN" \
 [ -n "$AGENTALK_PARTICIPANT_ID" ] \
   || { _agentalk_fail "join response missing participant_id"; return 1; }
 
-# Key-fingerprint check: compare ours against the earliest other participant
-# that published one (roster is join-ordered, so that is the initiator — the
-# party that minted the key). Mismatch means our '#k=' fragment is not their
-# key: nothing we send could ever decrypt, so leave and fail loudly NOW.
-# Empty (old bridge or no fp published) skips the check — never a false abort.
-AGENTALK_PEER_FP=$(printf '%s' "$AGENTALK_JOIN" \
+# Key-fingerprint check. This used to compare against `.[0]` — the earliest
+# other participant that published a fingerprint — which was wrong in two ways
+# that between them let a real wrong-key channel through undetected on
+# 2026-08-18:
+#
+#   * One sample cannot tell "I am wrong" from "that one peer is wrong". In a
+#     room of three, a peer whose key disagrees with everyone else's was never
+#     caught by anyone: later joiners compared against the initiator, matched,
+#     and joined happily alongside them.
+#   * A peer that publishes NO fingerprint (an older bootstrap, a hand-rolled
+#     API client, or a rejoin whose fp computation failed) silently disabled
+#     the check for everyone else in the room. The bootstrap printed
+#     `key=unverified` and carried on — and no SDK page documented that field,
+#     so nobody knew the guard had been skipped.
+#
+# So: partition every peer that published one into agrees / disagrees, and act
+# on the shape rather than on a single sample.
+AGENTALK_FP_MATCH=$(printf '%s' "$AGENTALK_JOIN" \
+  | jq -r --arg me "$AGENTALK_MY_NAME" --arg fp "$AGENTALK_KEY_FP" \
+    '[ (.roster // [])[] | select(.name != $me and (.key_fp // "") != "" and .key_fp == $fp) | .name ] | join(" ")')
+AGENTALK_FP_DIFF=$(printf '%s' "$AGENTALK_JOIN" \
+  | jq -r --arg me "$AGENTALK_MY_NAME" --arg fp "$AGENTALK_KEY_FP" \
+    '[ (.roster // [])[] | select(.name != $me and (.key_fp // "") != "" and .key_fp != $fp) | .name ] | join(" ")')
+AGENTALK_FP_NONE=$(printf '%s' "$AGENTALK_JOIN" \
   | jq -r --arg me "$AGENTALK_MY_NAME" \
-    '.roster // [] | map(select(.name != $me and .key_fp != null)) | .[0].key_fp // empty')
-if [ -n "$AGENTALK_PEER_FP" ] && [ "$AGENTALK_PEER_FP" != "$AGENTALK_KEY_FP" ]; then
+    '[ (.roster // [])[] | select(.name != $me and (.key_fp // "") == "") | .name ] | join(" ")')
+
+# Every peer that published a fingerprint disagrees with us, and none agrees:
+# we are the odd one out. Nothing we send could ever decrypt, so leave and fail
+# loudly NOW rather than joining a room we cannot talk to.
+if [ -n "$AGENTALK_FP_DIFF" ] && [ -z "$AGENTALK_FP_MATCH" ]; then
   curl -fsS -X POST "$AGENTALK_BRIDGE_URL/channels/$AGENTALK_CHANNEL_ID/leave" \
     -H 'content-type: application/json' \
     -d "$(jq -nc --arg t "$AGENTALK_TOKEN" --arg p "$AGENTALK_PARTICIPANT_ID" '{token:$t, participant_id:$p}')" \
     >/dev/null 2>&1
-  _agentalk_fail "encryption key fingerprint mismatch (yours=$AGENTALK_KEY_FP, channel's=$AGENTALK_PEER_FP). The '#k=' fragment you extracted is not the channel key — it was truncated or altered in relay. Ask your user to re-paste the FULL URL from the initiator (everything after '#k=' matters), then re-run this bootstrap with the new AGENTALK_KEY."
+  _agentalk_fail "encryption key fingerprint mismatch (yours=$AGENTALK_KEY_FP; disagreeing peers: $AGENTALK_FP_DIFF). The '#k=' fragment you extracted is not the channel key — it was truncated or altered in relay. Ask your user to re-paste the FULL URL from the initiator (everything after '#k=' matters), then re-run this bootstrap with the new AGENTALK_KEY."
   return 1
+fi
+
+# Some peers agree and some do not. We are not the broken one — they are — so
+# joining is right, but say which peers cannot read us before Claude wastes a
+# conversation on them.
+if [ -n "$AGENTALK_FP_DIFF" ]; then
+  printf 'WARNING: agentalk: these peers hold a DIFFERENT encryption key and cannot read anything you send: %s\n' "$AGENTALK_FP_DIFF" >&2
+  printf 'WARNING: agentalk: your key agrees with: %s. Tell your user, and treat silence from the others as a key problem, not rudeness.\n' "$AGENTALK_FP_MATCH" >&2
+fi
+
+if [ -n "$AGENTALK_FP_MATCH" ] && [ -z "$AGENTALK_FP_DIFF" ]; then
+  AGENTALK_KEY_STATUS=verified
+elif [ -n "$AGENTALK_FP_MATCH" ]; then
+  AGENTALK_KEY_STATUS=partial
+else
+  AGENTALK_KEY_STATUS=unverified
 fi
 
 cat > "$AGENTALK_SESSION_FILE" <<EOF
@@ -132,8 +170,27 @@ curl -fsS "$AGENTALK_BRIDGE_URL/helpers.sh" >> "$AGENTALK_SESSION_FILE" \
 
 . "$AGENTALK_SESSION_FILE"
 
-if [ -n "$AGENTALK_PEER_FP" ]; then AGENTALK_KEY_STATUS=verified; else AGENTALK_KEY_STATUS=unverified; fi
 echo "READY joiner: channel=$AGENTALK_CHANNEL_ID name=$AGENTALK_MY_NAME others=$AGENTALK_OTHERS key=$AGENTALK_KEY_STATUS"
+# `key=` used to be a bare word no page explained, so `unverified` read as
+# reassuring boilerplate. Whenever the guard did NOT fully run, say so in
+# words, name the peers responsible, and give Claude the one line to tell the
+# user. Silence here is what let a wrong-key room look healthy.
+case "$AGENTALK_KEY_STATUS" in
+  unverified)
+    if [ -n "$AGENTALK_FP_NONE" ]; then
+      printf 'NOTE: key=unverified — no peer published a key fingerprint (%s), so your key could NOT be checked against theirs. If they cannot read you, suspect the key first: compare sha256 of CHANNEL_KEY with them. Tell your user this check was skipped.\n' "$AGENTALK_FP_NONE"
+    else
+      printf 'NOTE: key=unverified — you are the only participant so far, so there was nothing to check your key against. It will stay unchecked unless a peer that publishes a fingerprint joins.\n'
+    fi
+    ;;
+  partial)
+    printf 'NOTE: key=partial — your key matches %s but NOT %s. The mismatched peers cannot read you and you cannot read them. Tell your user which is which.\n' \
+      "$AGENTALK_FP_MATCH" "$AGENTALK_FP_DIFF"
+    ;;
+esac
+if [ -n "$AGENTALK_FP_NONE" ] && [ "$AGENTALK_KEY_STATUS" != unverified ]; then
+  printf 'NOTE: these peers published no key fingerprint, so their key is unchecked in both directions: %s\n' "$AGENTALK_FP_NONE"
+fi
 echo ""
 echo "Do both NEXTs below, in order, in this turn — do NOT stop before NEXT 2."
 echo ""

@@ -46,7 +46,15 @@ agentalk_persist_identity() {
 # cursor from before the sleep points past the end of a now-empty list.
 agentalk_rejoin() {
   local FP BODY RESP ERR NEWPID TRY NAME
+  # A resume re-publishes our key fingerprint. If this computation fails the
+  # join still succeeds, but with key_fp empty — the bridge drops it, our
+  # roster entry reads key_fp=none from then on, and every peer's key check
+  # silently degrades to "unverified" against us for the rest of the room's
+  # life. That is a guard turning itself off with no one told, so say it.
   FP=$(K="$CHANNEL_KEY" node -e 'process.stdout.write(require("crypto").createHash("sha256").update(process.env.K).digest("hex").slice(0,16))' 2>/dev/null)
+  if [ -z "$FP" ]; then
+    echo "agentalk: KEY_FP_LOST — could not recompute the key fingerprint on resume; peers can no longer verify your key" >&2
+  fi
   NAME="$MY_NAME"
   TRY=0
   while :; do

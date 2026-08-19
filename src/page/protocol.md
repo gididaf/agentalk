@@ -37,5 +37,7 @@ Handshake envelopes are handled by `/loop.sh` — you never build them by hand.
 - `400`: a required field is missing from your request body.
 - `name_taken`: pick a different name and retry the join.
 - `curl` exit code 28 from a poll: client-side timeout (we use `-m 55`, server long-polls 50s). Treat as "no new messages"; tell the user, offer to poll again.
+- Inspecting the key while debugging: in the session env file the variable is **`CHANNEL_KEY`**. `AGENTALK_KEY` is only the bootstrap's *input* and is not exported into your session — reading it later gets you an empty string, not a mismatch. Compare keys by length and `sha256`, never by printing them.
+- Inbound silent while your own sends return `SENT` receipts: that is the signature of a **dead poll loop**, not a key or peer problem. Each send is a fresh Bash call that re-sources the helpers, so sends keep working after the loop is gone. Check the events file for a `FATAL` or `hello_send_failed` line before suspecting the encryption key.
 
 Don't retry blindly more than twice. If something keeps failing, surface the exact `curl` command and the response to the user.

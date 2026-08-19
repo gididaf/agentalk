@@ -37,6 +37,58 @@ touch "$EVENTS_FILE" 2>/dev/null
 exec > >(tee -a "$EVENTS_FILE")
 echo "=== loop start $(date '+%H:%M:%S') MY_NAME=$MY_NAME CHANNEL_ID=$CHANNEL_ID PARTICIPANT_ID=$PARTICIPANT_ID MY_CHALL=${MY_CHALL:-(unset)} ===" >&2
 
+# --- preconditions: refuse to run half-wired ------------------------------
+#
+# This file is SOURCED so it shares the caller's shell, where the session env
+# file has defined agentalk_send / agentalk_decrypt as shell FUNCTIONS. Every
+# variable in that file is `export`ed and so survives into a child shell;
+# functions do not. Run this with `bash` instead of `.` and the loop still
+# looks entirely correct — right channel, right key, right events file, and it
+# even writes its loop-start line — while the first helper call dies with
+# "command not found".
+#
+# That shipped as a silently dead channel (observed 2026-08-18, channel
+# 1c01e83011611069): the loop exited on its first line with a bare
+# `hello_send_failed`, inbound went permanently dark, and because the agent's
+# own sends were separate Bash calls that each re-sourced the env file they
+# kept returning SENT receipts. Every visible signal said the link was healthy.
+# The peer, receiving messages but never a WELCOME, concluded the encryption
+# key was mismatched and burned the channel. Nothing was wrong with the bridge,
+# the key, or the crypto.
+#
+# So check before emitting anything else, and put the remedy in the message
+# rather than in a debug log nobody is told to read.
+AGENTALK_MISSING=
+for _fn in agentalk_send agentalk_decrypt; do
+  command -v "$_fn" >/dev/null 2>&1 || AGENTALK_MISSING="${AGENTALK_MISSING:+$AGENTALK_MISSING,}$_fn"
+done
+unset _fn
+if [ -n "$AGENTALK_MISSING" ]; then
+  # One line: Monitor's contract is one event per line. printf, not echo —
+  # zsh's builtin echo mangles backslashes and these paths are user-visible.
+  printf 'agentalk: FATAL loop_not_sourced missing=%s hint=loop.sh must be SOURCED, not executed. Re-run the NEXT 1 command with its leading dot: . %s && . <(curl -fsS %s/loop.sh)\n' \
+    "$AGENTALK_MISSING" "'${SESSION_FILE:-<your session env file>}'" "${BRIDGE_URL:-<bridge>}"
+  exit 1
+fi
+
+# Same class of failure, one layer down: sourcing the wrong file, or a session
+# env file that a rewrite truncated, leaves the loop polling with an empty
+# token or decrypting with an empty key. Both fail in ways that read as a
+# remote problem. Name the missing variable instead.
+AGENTALK_MISSING_ENV=
+for _v in BRIDGE_URL CHANNEL_ID TOKEN PARTICIPANT_ID MY_NAME CHANNEL_KEY; do
+  # eval, not ${!_v}: bash-only indirect expansion, and this is sourced into
+  # zsh on macOS as often as into bash.
+  eval "[ -n \"\${$_v:-}\" ]" \
+    || AGENTALK_MISSING_ENV="${AGENTALK_MISSING_ENV:+$AGENTALK_MISSING_ENV,}$_v"
+done
+unset _v
+if [ -n "$AGENTALK_MISSING_ENV" ]; then
+  printf 'agentalk: FATAL loop_env_incomplete missing=%s hint=source the session env file the bootstrap printed, then source loop.sh in the same Bash call\n' \
+    "$AGENTALK_MISSING_ENV"
+  exit 1
+fi
+
 # Leave a last line in the debug log when the parent shell takes the loop down
 # with it (session end, TaskStop). Without this, a killed loop and a loop that
 # never ran are indistinguishable post-mortem — real QA logs from 2026-08-03
@@ -53,6 +105,18 @@ AGENTALK_IN_LOOP=1
 # poll — Monitor wakes are expensive.
 AGENTALK_STALE_S=${AGENTALK_STALE_S:-180}
 STALE_PEERS=" "
+
+# Our own key fingerprint, for the runtime key check below. The bootstrap
+# verifies once, at join. It cannot cover a peer who arrives LATER, or one
+# whose fingerprint changed across a resume — and those are exactly the cases
+# where a wrong key goes unnoticed, because nobody re-runs a join-time check.
+# The roster carries key_fp on every poll, so the cheap thing is to keep
+# checking. Computed once here, not per poll.
+AGENTALK_MY_FP=$(K="$CHANNEL_KEY" node -e 'process.stdout.write(require("crypto").createHash("sha256").update(process.env.K).digest("hex").slice(0,16))' 2>/dev/null)
+[ -z "$AGENTALK_MY_FP" ] && echo "  -> WARNING: could not compute own key fingerprint; runtime key check disabled" >&2
+# One line per peer, once per session — never repeated, so this cannot become
+# per-poll noise.
+KEY_CHECKED=" "
 
 # --- human peers and burst coalescing -------------------------------------
 #
@@ -115,8 +179,18 @@ if [ -n "${MY_CHALL:-}" ]; then
   if agentalk_send "$HELLO_PT"; then
     echo "[$(date '+%H:%M:%S')] auto-sent HELLO chall=$MY_CHALL" >&2
   else
-    echo "[$(date '+%H:%M:%S')] auto-HELLO FAILED (agentalk_send rc=$?)" >&2
-    echo "agentalk: SYSTEM hello_send_failed"
+    # Capture $? on the FIRST line of the branch, before anything else runs.
+    # This used to read `rc=$?` inside a string that also contained
+    # $(date '+%H:%M:%S'); the command substitution runs first and resets $?,
+    # so the one diagnostic that named the cause always printed rc=0 — the
+    # value meaning "fine" — next to the word FAILED. That is how a missing
+    # helper function (rc=127) got reported as success and cost a channel.
+    AGENTALK_HELLO_RC=$?
+    echo "[$(date '+%H:%M:%S')] auto-HELLO FAILED (agentalk_send rc=$AGENTALK_HELLO_RC)" >&2
+    # Carry the rc into the events file too. agentalk_send prints its own
+    # SEND_FAILED line for every failure it can describe, so a bare
+    # hello_send_failed with no preceding line means the call never ran at all.
+    printf 'agentalk: SYSTEM hello_send_failed rc=%s\n' "$AGENTALK_HELLO_RC"
     exit 1
   fi
 fi
@@ -211,18 +285,59 @@ while true; do
   # construction (bootstrap sanitizes to [a-zA-Z0-9._-]).
   ROSTER_PEERS=$(printf '%s' "$RESP" | jq -r --arg me "$MY_NAME" \
     '.roster // [] | .[] | select(.name != $me) | .name' 2>/dev/null | tr '\n' ' ')
-  NOW_STALE=$(printf '%s' "$RESP" | jq -r --arg me "$MY_NAME" --argjson th "$AGENTALK_STALE_S" \
-    '.roster // [] | .[] | select(.name != $me and .last_seen_s > $th) | .name' 2>/dev/null | tr '\n' ' ')
-  for N in $NOW_STALE; do
+
+  # Runtime key verification — see AGENTALK_MY_FP above. A peer publishing a
+  # fingerprint that differs from ours definitely cannot read us; a peer
+  # publishing none cannot be checked at all, in either direction, and that
+  # used to be completely invisible. Both are reported once and never again.
+  if [ -n "$AGENTALK_MY_FP" ]; then
+    while IFS= read -r RLINE; do
+      [ -z "$RLINE" ] && continue
+      RN=${RLINE%% *}
+      RF=${RLINE##* }
+      case "$KEY_CHECKED" in *" $RN "*) continue ;; esac
+      KEY_CHECKED="$KEY_CHECKED$RN "
+      if [ "$RF" = "-" ]; then
+        printf 'agentalk: KEY_UNVERIFIED name=%s\n' "$RN"
+      elif [ "$RF" != "$AGENTALK_MY_FP" ]; then
+        printf 'agentalk: KEY_MISMATCH name=%s\n' "$RN"
+      fi
+    done <<EOF
+$(printf '%s' "$RESP" | jq -r --arg me "$MY_NAME" \
+  '(.roster // [])[] | select(.name != $me) | "\(.name) \(if (.key_fp // "") == "" then "-" else .key_fp end)"' 2>/dev/null)
+EOF
+  fi
+  # Kept newline-separated for iteration and space-joined for the membership
+  # `case` tests below. Both forms are needed — see the word-splitting note.
+  NOW_STALE_LINES=$(printf '%s' "$RESP" | jq -r --arg me "$MY_NAME" --argjson th "$AGENTALK_STALE_S" \
+    '.roster // [] | .[] | select(.name != $me and .last_seen_s > $th) | .name' 2>/dev/null)
+  NOW_STALE=$(printf '%s' "$NOW_STALE_LINES" | tr '\n' ' ')
+  # `while read` over a heredoc, NOT `for N in $NOW_STALE`. zsh does not
+  # word-split unquoted parameter expansions (no SH_WORD_SPLIT by default) and
+  # Claude Code's Bash tool runs zsh on macOS, so the `for` ran exactly ONCE
+  # with the whole space-joined list — trailing space included — as a single
+  # $N. The jq lookup below then matched no roster entry, and the event went
+  # out as `PEER_STALE name=<everyone> unseen=s` with the number missing.
+  # Observed live on 2026-08-19. A heredoc keeps the loop body in the current
+  # shell (a pipe would subshell it and lose STALE_PEERS) and behaves
+  # identically in bash and zsh.
+  while IFS= read -r N; do
+    [ -z "$N" ] && continue
     case "$STALE_PEERS" in *" $N "*) ;; *)
       SECS=$(printf '%s' "$RESP" | jq -r --arg n "$N" '.roster[] | select(.name == $n) | .last_seen_s' 2>/dev/null)
-      echo "  -> peer $N stale (last_seen=${SECS}s)" >&2
-      echo "agentalk: PEER_STALE name=$N unseen=${SECS}s"
+      echo "  -> peer $N stale (last_seen=${SECS:-unknown}s)" >&2
+      printf 'agentalk: PEER_STALE name=%s unseen=%ss\n' "$N" "${SECS:-unknown}"
       STALE_PEERS="$STALE_PEERS$N "
       ;;
     esac
-  done
-  for N in $STALE_PEERS; do
+  done <<EOF
+$NOW_STALE_LINES
+EOF
+  # Same word-splitting trap as the loop above — and worse here, because a
+  # mangled $N never matches the roster, so PEER_BACK could not fire and a peer
+  # that came back stayed marked stale for the rest of the session. Snapshot
+  # the set before iterating: the body mutates STALE_PEERS.
+  while IFS= read -r N; do
     [ -z "$N" ] && continue
     case " $ROSTER_PEERS" in *" $N "*) ;; *)
       # Peer left the channel entirely — forget silently, the leave event
@@ -233,11 +348,13 @@ while true; do
     esac
     case " $NOW_STALE" in *" $N "*) ;; *)
       echo "  -> peer $N back (polling again)" >&2
-      echo "agentalk: PEER_BACK name=$N"
+      printf 'agentalk: PEER_BACK name=%s\n' "$N"
       STALE_PEERS=$(printf '%s' "$STALE_PEERS" | sed "s/ $N / /")
       ;;
     esac
-  done
+  done <<EOF
+$(printf '%s' "$STALE_PEERS" | tr ' ' '\n')
+EOF
   ADDED_THIS_ROUND=0
   while read -r LINE; do
     TYPE=$(printf '%s' "$LINE" | jq -r '.type')
@@ -297,7 +414,10 @@ while true; do
       if agentalk_send "$WELC_PT"; then
         echo "  -> auto-welcomed $SAFE_FROM with chall=$HELLO (send OK)" >&2
       else
-        echo "  -> auto-welcome FAILED (agentalk_send returned $?)" >&2
+        # First line of the branch — see the auto-HELLO note above; any
+        # intervening command (a $(date), a test) would reset $? to its own.
+        AGENTALK_WELC_RC=$?
+        echo "  -> auto-welcome FAILED (agentalk_send returned $AGENTALK_WELC_RC)" >&2
       fi
       # A browser participant marks itself in the HELLO envelope. Reusing the
       # existing handshake rather than adding a message type means an agent
