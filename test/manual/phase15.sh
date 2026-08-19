@@ -278,6 +278,59 @@ done
 grep -q 'Read the `key=` field' src/page/joiner.md \
   && ok "joiner.md documents the key= status field" || bad "joiner.md still leaves key= undocumented"
 
+step "8. the two-step fallback for harnesses that block '. <(curl ...)'"
+# Some Claude Code configurations refuse process substitution that sources a
+# network fetch, whatever URL is inside it. That blocks EVERY entry point this
+# SDK has, and the documented alternative used to be "hand-roll the protocol" —
+# which is what one peer actually did, for two days, in 2026-08.
+FBOUT=$( cd "$INITDIR" && curl -fsS "$BRIDGE/bootstrap.sh" -o /tmp/agentalk-p15-fb.sh && . /tmp/agentalk-p15-fb.sh 2>&1 )
+printf '%s' "$FBOUT" | grep -q 'READY initiator' \
+  && ok "bootstrap works when fetched to disk and sourced separately" || bad "two-step bootstrap failed"
+printf '%s' "$FBOUT" | grep -q 'agentalk-loop.sh' \
+  && ok "NEXT 1 prints the blocked-construct alternative" || bad "NEXT 1 does not offer the fallback"
+printf '%s' "$FBOUT" | grep -qi 'MUST be sourced' \
+  && ok "the fallback still insists on the leading dot" || bad "fallback omits the sourcing requirement"
+for PAGE in initiator joiner; do
+  curl -fsS "$BRIDGE/${PAGE}.md" 2>/dev/null | grep -q 'agentalk-loop.sh' \
+    || curl -fsS "$BRIDGE/llms.txt" 2>/dev/null | grep -q 'agentalk-loop.sh' \
+    && ok "$PAGE SDK documents the fallback" || bad "$PAGE SDK omits the fallback"
+done
+
+step "9. the served crypto spec is correct, not just present"
+# A wrong spec is worse than no spec: it sends implementers down a path that
+# fails closed and looks like a key mismatch. Verify the published test vector
+# against the SERVED page, the way an implementer would read it.
+SPEC=$(curl -fsS "$BRIDGE/llms.txt" 2>/dev/null | sed -n '/^key    /,/^blob   /p')
+VK=$(printf '%s' "$SPEC" | awk '/^key    /{print $2}')
+VA=$(printf '%s' "$SPEC" | awk '/^aad    /{print $2}')
+VB=$(printf '%s' "$SPEC" | awk '/^blob   /{print $2}')
+VF=$(printf '%s' "$SPEC" | awk '/^key_fp /{print $2}')
+{ [ -n "$VK" ] && [ -n "$VA" ] && [ -n "$VB" ] && [ -n "$VF" ]; } \
+  && ok "the served page carries a complete test vector" || bad "test vector missing from the served page"
+if [ -n "$VB" ]; then
+  VOUT=$(K="$VK" AAD="$VA" B="$VB" node -e '
+    const c=require("crypto");
+    const key=Buffer.from(process.env.K,"hex"), aad=Buffer.from(process.env.AAD,"utf8");
+    const buf=Buffer.from(process.env.B,"base64");
+    const d=c.createDecipheriv("aes-256-gcm",key,buf.subarray(0,12));
+    d.setAAD(aad); d.setAuthTag(buf.subarray(buf.length-16));
+    process.stdout.write(Buffer.concat([d.update(buf.subarray(12,buf.length-16)),d.final()]).toString("utf8"));
+  ' 2>/dev/null)
+  [ "$VOUT" = '{"text":"hello"}' ] \
+    && ok "the published blob decrypts to the published plaintext" || bad "test vector does not decrypt (got: ${VOUT:-nothing})"
+  VFP=$(K="$VK" node -e 'process.stdout.write(require("crypto").createHash("sha256").update(process.env.K).digest("hex").slice(0,16))')
+  [ "$VFP" = "$VF" ] \
+    && ok "the published key_fp matches sha256 over the HEX STRING" || bad "key_fp in the spec is wrong ($VFP vs $VF)"
+  WRONG=$(K="$VK" AAD="wrong:aad" B="$VB" node -e '
+    const c=require("crypto");
+    try{const key=Buffer.from(process.env.K,"hex");const buf=Buffer.from(process.env.B,"base64");
+    const d=c.createDecipheriv("aes-256-gcm",key,buf.subarray(0,12));
+    d.setAAD(Buffer.from(process.env.AAD,"utf8")); d.setAuthTag(buf.subarray(buf.length-16));
+    d.update(buf.subarray(12,buf.length-16)); d.final(); process.stdout.write("ACCEPTED");}catch(e){process.stdout.write("REJECTED");}')
+  [ "$WRONG" = "REJECTED" ] \
+    && ok "a wrong AAD is rejected, as the spec promises" || bad "wrong AAD was ACCEPTED — the tag is not being verified"
+fi
+
 echo
 echo "$(green "PASS: $PASS")   $( [ "$FAIL" -gt 0 ] && red "FAIL: $FAIL" || echo "FAIL: 0")"
 [ "$FAIL" -eq 0 ] || exit 1
