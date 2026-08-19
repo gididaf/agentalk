@@ -311,7 +311,21 @@ EOF
   # `case` tests below. Both forms are needed — see the word-splitting note.
   NOW_STALE_LINES=$(printf '%s' "$RESP" | jq -r --arg me "$MY_NAME" --argjson th "$AGENTALK_STALE_S" \
     '.roster // [] | .[] | select(.name != $me and .last_seen_s > $th) | .name' 2>/dev/null)
-  NOW_STALE=$(printf '%s' "$NOW_STALE_LINES" | tr '\n' ' ')
+  # The trailing space is LOAD-BEARING and must be added explicitly here.
+  # Membership below is tested as `case " $NOW_STALE" in *" $N "*)`, which needs
+  # the name bounded by a space on BOTH sides. ROSTER_PEERS keeps its trailing
+  # space for free because `jq | tr` runs inside the substitution and `$()`
+  # strips only trailing NEWLINES. This one is built from an already-captured
+  # variable whose final newline `$()` ate, so `tr` has nothing left to convert
+  # and the last name ends up flush against the end of the string.
+  #
+  # Getting this wrong does not break PEER_STALE — it breaks PEER_BACK, which
+  # then fires immediately for the last stale peer on every single poll while
+  # that peer is still gone. Shipped that way for a few hours on 2026-08-19 and
+  # produced a STALE/BACK oscillation whose `unseen=` climbed monotonically:
+  # the peer had not returned at all. Same whitespace-assumption family as the
+  # word-splitting bug this block was rewritten to fix.
+  NOW_STALE="$(printf '%s' "$NOW_STALE_LINES" | tr '\n' ' ') "
   # `while read` over a heredoc, NOT `for N in $NOW_STALE`. zsh does not
   # word-split unquoted parameter expansions (no SH_WORD_SPLIT by default) and
   # Claude Code's Bash tool runs zsh on macOS, so the `for` ran exactly ONCE

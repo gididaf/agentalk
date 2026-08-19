@@ -43,6 +43,12 @@ ok()   { echo "  $(green PASS) — $1"; PASS=$((PASS+1)); }
 bad()  { echo "  $(red FAIL) — $1"; FAIL=$((FAIL+1)); }
 step() { echo; echo "$(yellow "▸ $1")"; }
 
+# `grep -c` PRINTS the count and EXITS NON-ZERO when the count is zero. So
+# `$(grep -c x f || echo 0)` yields "0\n0", which never equals "0" — the
+# assertion then fails on exactly the case it was written to accept. Same shape
+# as the bugs this file guards: a check that misreports its own do-nothing path.
+count() { local n; n=$(grep -c "$1" "$2" 2>/dev/null); printf '%s' "${n:-0}"; }
+
 need() { command -v "$1" >/dev/null || { echo "missing command: $1"; exit 1; }; }
 need curl
 need jq
@@ -203,9 +209,9 @@ if [ -f "$NSF" ]; then
     || bad "no KEY_UNVERIFIED event — an unverifiable peer is invisible again"
   grep -q 'agentalk: KEY_MISMATCH name=wrongfp' "$EV5" 2>/dev/null \
     && ok "emits KEY_MISMATCH for the wrong-key peer" || bad "no KEY_MISMATCH event"
-  [ "$(grep -c 'agentalk: KEY_MISMATCH' "$EV5" 2>/dev/null || echo 0)" = "1" ] \
+  [ "$(count 'agentalk: KEY_MISMATCH' "$EV5")" = "1" ] \
     && ok "KEY_MISMATCH is emitted exactly once, not per poll" || bad "KEY_MISMATCH repeated across polls"
-  [ "$(grep -c 'agentalk: KEY_UNVERIFIED' "$EV5" 2>/dev/null || echo 0)" = "1" ] \
+  [ "$(count 'agentalk: KEY_UNVERIFIED' "$EV5")" = "1" ] \
     && ok "KEY_UNVERIFIED is emitted exactly once, not per poll" || bad "KEY_UNVERIFIED repeated across polls"
   grep -qE 'agentalk: KEY_(MISMATCH|UNVERIFIED) name=agentalk-p15-nofp_' "$EV5" 2>/dev/null \
     && bad "the loop reported ITSELF" || ok "never reports itself"
@@ -230,6 +236,22 @@ if [ -f "$GSF" ]; then
       && ok "unseen= carries digits" || bad "unseen= has no number — the word-split bug is back"
     printf '%s' "$STALE" | grep -qE '^agentalk: PEER_STALE name=[^ ]+ unseen=' \
       && ok "names exactly one peer per line" || bad "name= contains a space — whole list in one event"
+    # PEER_BACK must NOT fire while the peer is still gone. None of the peers in
+    # this room are polling, so a single BACK here is a false positive. The
+    # membership test needs the name bounded by spaces on both sides, and
+    # NOW_STALE lost its trailing space once already — which produced a
+    # STALE/BACK oscillation on every poll while the peer was still absent.
+    [ "$(count 'agentalk: PEER_BACK' "$EV6")" = "0" ] \
+      && ok "PEER_BACK does NOT fire while the peer is still stale" \
+      || bad "false PEER_BACK: $(count 'agentalk: PEER_BACK' "$EV6") emitted for a peer that never returned"
+    # The oscillation signature itself: STALE is a TRANSITION, so each peer may
+    # appear at most once however many polls elapse. Counting distinct names
+    # rather than a fixed total keeps this correct as the room's size changes.
+    ST_TOTAL=$(count 'agentalk: PEER_STALE' "$EV6")
+    ST_UNIQ=$(grep -o 'agentalk: PEER_STALE name=[^ ]*' "$EV6" 2>/dev/null | sort -u | wc -l | tr -d ' ')
+    [ "$ST_TOTAL" = "$ST_UNIQ" ] \
+      && ok "PEER_STALE is a transition, not a per-poll repeat ($ST_TOTAL line(s), $ST_UNIQ peer(s))" \
+      || bad "PEER_STALE repeated: $ST_TOTAL lines for only $ST_UNIQ peer(s) — the stale set is not sticking"
   else
     bad "no PEER_STALE event emitted within the window"
   fi
