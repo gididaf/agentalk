@@ -64,6 +64,8 @@ Manual QA, one script per build phase. **Re-run the relevant one after any SDK/l
 
 Phases 1-8, 10, 11 and 13 are curl-driven. Phases 9 and 12 actually *execute* `loop.sh` against a live bridge, because they test runtime behaviour (sleep/wake, burst buffering) that no amount of source-grepping can confirm.
 
+**Known gap (2026-08-19):** no phase script covers the guards added in `d64e563` — `FATAL loop_not_sourced`, `FATAL loop_env_incomplete`, `SYSTEM hello_send_failed rc=<n>`, or the `KEY_MISMATCH` / `KEY_UNVERIFIED` roster events and the `key=verified|partial|unverified` bootstrap statuses. They were verified by hand (executing `loop.sh` with `bash` to trip the guard, and joining a channel against a peer publishing no `key_fp`), but nothing re-checks them. Given this repo has already had six of seven gates rot silently, treat that as a debt to pay before the next change in this area, not as coverage.
+
 One script drives a real model:
 
 ```bash
@@ -177,4 +179,4 @@ deploy/{Caddyfile,install.sh,agentalk.service,env.example}
 
 ## Last Synced Commit
 
-`995a9ba5fc504fc3aea400f8e3adea71ce025ac4` — 2026-08-17
+`d64e563bd2e99f4c2e2ae73d8f8929ce008164b2` — 2026-08-19
